@@ -1,3 +1,4 @@
+
 /**
  * ==========================================
  * GEMINI AI SERVICE (BATCHED & PARALLEL)
@@ -35,8 +36,20 @@ const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: s
   });
 };
 
+// ROBUST JSON CLEANER
 const cleanJSON = (text: string) => {
-  return text.replace(/```json/g, '').replace(/```/g, '').trim();
+  // 1. Remove Markdown Code Blocks
+  let cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
+  
+  // 2. Find the first '[' and the last ']' to ignore preamble text
+  const firstBracket = cleaned.indexOf('[');
+  const lastBracket = cleaned.lastIndexOf(']');
+  
+  if (firstBracket !== -1 && lastBracket !== -1) {
+    cleaned = cleaned.substring(firstBracket, lastBracket + 1);
+  }
+  
+  return cleaned;
 };
 
 const sanitizeQuestion = (q: any): Omit<Question, 'id'> => {
@@ -97,13 +110,10 @@ export const generateQuiz = async (
   
   // Handle File Input if present
   let filePart = null;
-  let contextText = ""; // To store text for Chat feature
+  let contextText = ""; 
 
   if (file) {
     filePart = await fileToGenerativePart(file);
-    // Note: For PDF/Image inputs, we can't easily get text back from Gemini here without a separate call.
-    // For Chat later, we will re-send the filePart.
-    // If it's text file, we store it.
     if ('text' in filePart) {
       contextText = filePart.text;
     } else {
@@ -160,8 +170,8 @@ export const generateQuiz = async (
       Language: INDONESIAN.
       ${contextPrompt}
       INSTRUCTIONS: ${specificInstruction} ${stylePrompt}
-      OUTPUT: JSON Array only.
-      [{"text": "...", "options": ["A","B","C","D"], "correctIndex": 0, "explanation": "...", "keyPoint": "Topic", "difficulty": "Easy"}]
+      OUTPUT FORMAT: STRICT JSON Array. Do not wrap in markdown blocks.
+      Example: [{"text": "...", "options": ["A","B","C","D"], "correctIndex": 0, "explanation": "...", "keyPoint": "Topic", "difficulty": "Easy"}]
     `;
 
     parts.push({ text: finalPrompt });
@@ -170,7 +180,10 @@ export const generateQuiz = async (
       const response = await ai.models.generateContent({
         model: modelId,
         contents: { parts },
-        config: { responseMimeType: "application/json" }
+        // KEY FIX: FORCE JSON RESPONSE TYPE
+        config: { 
+          responseMimeType: "application/json" 
+        }
       });
 
       completedBatches++;
@@ -179,7 +192,22 @@ export const generateQuiz = async (
       const text = response.text;
       if (!text) return [];
 
-      const rawData = JSON.parse(cleanJSON(text));
+      let rawData;
+      try {
+        const cleaned = cleanJSON(text);
+        rawData = JSON.parse(cleaned);
+      } catch (parseError) {
+        console.error("JSON Parse Error on Batch " + currentBatchNum, text);
+        // Fallback: try to see if it's wrapped in an object key
+        try {
+           const obj = JSON.parse(text);
+           if (obj.questions && Array.isArray(obj.questions)) rawData = obj.questions;
+           else if (Array.isArray(obj)) rawData = obj;
+        } catch(e) {
+           return [];
+        }
+      }
+      
       return Array.isArray(rawData) ? rawData.map(q => sanitizeQuestion(q)) : [];
     } catch (e) {
       console.warn(`Batch ${currentBatchNum} failed`, e);
@@ -190,7 +218,7 @@ export const generateQuiz = async (
   const results = await Promise.all(batchPromises);
   let allQuestions: any[] = results.flat();
 
-  if (allQuestions.length === 0) throw new Error("Gagal membuat soal. Cek API Key atau koneksi internet.");
+  if (allQuestions.length === 0) throw new Error("Gagal membuat soal. Respon AI kosong atau tidak valid.");
 
   onProgress("Finalisasi...");
 

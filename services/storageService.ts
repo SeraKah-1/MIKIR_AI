@@ -1,15 +1,15 @@
 
 /**
  * ==========================================
- * STORAGE SERVICE (LOCAL STORAGE & SUPABASE)
+ * STORAGE SERVICE (Facade)
  * ==========================================
+ * Mengatur LocalStorage dan menjembatani ke MikirCloud (Supabase).
  */
 
 import { Question, ModelConfig, AiProvider, StorageProvider, CloudNote } from "../types";
-import { getSupabaseClient } from "../lib/supabaseClient";
+import { MikirCloud } from "./supabaseService"; 
 
 const HISTORY_KEY = 'glassquiz_history';
-const FOLDERS_KEY = 'glassquiz_folders'; 
 const GEMINI_KEY_STORAGE = 'glassquiz_api_key';
 const GROQ_KEY_STORAGE = 'glassquiz_groq_key';
 const STORAGE_PREF_KEY = 'glassquiz_storage_pref';
@@ -17,35 +17,24 @@ const SUPABASE_CONFIG_KEY = 'glassquiz_supabase_config';
 
 // --- API KEY MANAGEMENT ---
 export const saveApiKey = (provider: AiProvider, key: string) => {
-  if (provider === 'gemini') {
-    localStorage.setItem(GEMINI_KEY_STORAGE, key);
-  } else {
-    localStorage.setItem(GROQ_KEY_STORAGE, key);
-  }
+  if (provider === 'gemini') localStorage.setItem(GEMINI_KEY_STORAGE, key);
+  else localStorage.setItem(GROQ_KEY_STORAGE, key);
 };
 
 export const getApiKey = (provider: AiProvider = 'gemini'): string | null => {
-  if (provider === 'gemini') {
-    return localStorage.getItem(GEMINI_KEY_STORAGE);
-  } else {
-    return localStorage.getItem(GROQ_KEY_STORAGE);
-  }
+  if (provider === 'gemini') return localStorage.getItem(GEMINI_KEY_STORAGE);
+  else return localStorage.getItem(GROQ_KEY_STORAGE);
 };
 
 export const removeApiKey = (provider: AiProvider) => {
-  if (provider === 'gemini') {
-    localStorage.removeItem(GEMINI_KEY_STORAGE);
-  } else {
-    localStorage.removeItem(GROQ_KEY_STORAGE);
-  }
+  if (provider === 'gemini') localStorage.removeItem(GEMINI_KEY_STORAGE);
+  else localStorage.removeItem(GROQ_KEY_STORAGE);
 };
 
 // --- STORAGE CONFIGURATION ---
 export const saveStorageConfig = (provider: StorageProvider, config?: { url: string, key: string }) => {
   localStorage.setItem(STORAGE_PREF_KEY, provider);
-  if (config) {
-    localStorage.setItem(SUPABASE_CONFIG_KEY, JSON.stringify(config));
-  }
+  if (config) localStorage.setItem(SUPABASE_CONFIG_KEY, JSON.stringify(config));
 };
 
 export const getStorageProvider = (): StorageProvider => {
@@ -57,267 +46,175 @@ export const getSupabaseConfig = () => {
   return raw ? JSON.parse(raw) : null;
 };
 
-// --- FOLDER MANAGEMENT (Local Only for simplicity) ---
-export const getFolders = (): string[] => {
-  const raw = localStorage.getItem(FOLDERS_KEY);
-  return raw ? JSON.parse(raw) : [];
-};
+// --- WORKSPACE (LOCAL STORAGE - SYNCHRONOUS OPTIMIZED) ---
 
-export const createFolder = (name: string) => {
-  const folders = getFolders();
-  if (!folders.includes(name)) {
-    folders.push(name);
-    localStorage.setItem(FOLDERS_KEY, JSON.stringify(folders));
-  }
-};
-
-export const deleteFolder = (name: string) => {
-  const folders = getFolders().filter(f => f !== name);
-  localStorage.setItem(FOLDERS_KEY, JSON.stringify(folders));
-
-  const rawHistory = localStorage.getItem(HISTORY_KEY);
-  if (rawHistory) {
-    const history = JSON.parse(rawHistory);
-    const newHistory = history.map((item: any) => 
-      item.folder === name ? { ...item, folder: undefined } : item
-    );
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(newHistory));
-  }
-};
-
-// --- CLOUD NOTES INTEGRATION (CROSS-APP) ---
-export const fetchNotesFromSupabase = async (): Promise<CloudNote[]> => {
-  const sbConfig = getSupabaseConfig();
-  if (!sbConfig) return []; // Supabase not configured
-
-  try {
-    const supabase = getSupabaseClient(sbConfig.url, sbConfig.key);
-    
-    // We assume the other app uses a table named 'notes'
-    // We select id, title, content. Tags is optional.
-    const { data, error } = await supabase
-      .from('notes')
-      .select('id, title, content, created_at, tags')
-      .order('created_at', { ascending: false })
-      .limit(20); // Limit to last 20 notes to avoid overload
-
-    if (error) {
-      console.error("Failed to fetch notes:", error);
-      // Jangan throw error yang mematikan UI, kembalikan array kosong saja dengan log
-      return [];
-    }
-
-    return data as CloudNote[];
-  } catch (err) {
-    console.error("Supabase Connection Error (Fetch Notes):", err);
-    return [];
-  }
-};
-
-// --- HELPER: SAVE TO LOCAL (Internal) ---
-const saveToLocalStorage = (entry: any) => {
-  try {
-    const rawHistory = localStorage.getItem(HISTORY_KEY);
-    const history = rawHistory ? JSON.parse(rawHistory) : [];
-    
-    // Map snake_case to camelCase for local consistency if needed, 
-    // or simply store consistent object structure.
-    const localEntry = {
-        ...entry,
-        fileName: entry.file_name, // Mapping for UI compatibility
-        questionCount: entry.question_count,
-        topicSummary: entry.topic_summary
-    };
-
-    history.unshift(localEntry);
-    if (history.length > 50) history.pop(); // Keep last 50
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
-    console.log("Saved to Local Storage successfully.");
-  } catch (err) {
-    console.error("Local Storage Save Error (Quota Exceeded?):", err);
-  }
-};
-
-// --- QUIZ HISTORY MANAGEMENT ---
-
-export const saveGeneratedQuiz = async (
-  file: File | null, 
-  config: ModelConfig,
-  questions: Question[]
-) => {
-  const provider = getStorageProvider();
-  
-  // 1. Prepare Data Object (Consistent for both DBs)
+export const saveGeneratedQuiz = async (file: File | null, config: ModelConfig, questions: Question[]) => {
   const topicSummary = questions.length > 0 ? (questions[0].keyPoint || "General") : "General";
   const fileName = file ? file.name : (config.topic || "Topik Manual");
 
   const newEntry = {
     id: Date.now(), 
-    file_name: fileName,
-    model_id: config.modelId,
+    fileName: fileName,
+    file_name: fileName, 
+    modelId: config.modelId,
     mode: config.mode,
     provider: config.provider,
     date: new Date().toISOString(),
-    created_at: new Date().toISOString(), // Supabase usually handles this, but good for local
-    question_count: questions.length,
-    topic_summary: topicSummary,
-    questions: questions, // Supabase jsonb column
-    folder: undefined 
+    questionCount: questions.length,
+    topicSummary: topicSummary,
+    questions: questions,
+    lastScore: null,
+    tags: [config.mode, config.examStyle]
   };
 
-  // 2. Logic Branching
-  if (provider === 'supabase') {
+  try {
+    // 1. Save to Local Storage (Sync is faster for LS)
+    const rawHistory = localStorage.getItem(HISTORY_KEY);
+    const history = rawHistory ? JSON.parse(rawHistory) : [];
+    history.unshift(newEntry);
+    
+    // Limit local storage to 50 items to keep app light
+    if (history.length > 50) history.pop(); 
+    
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+
+    // 2. Auto-Upload to Cloud (Fire and Forget - Non Blocking)
     const sbConfig = getSupabaseConfig();
-    
-    if (!sbConfig) {
-      console.warn("Supabase provider selected but no config found. Falling back to local.");
-      saveToLocalStorage(newEntry);
-      return;
-    }
-    
-    try {
-      const supabase = getSupabaseClient(sbConfig.url, sbConfig.key);
-      
-      console.log("Attempting to save to Supabase...");
-      
-      // INSERT ke tabel 'generated_quizzes'
-      // Pastikan nama kolom di database (snake_case) sesuai dengan key di sini
-      const { error } = await supabase.from('generated_quizzes').insert({
-         file_name: newEntry.file_name,
-         model_id: newEntry.model_id,
-         mode: newEntry.mode,
-         topic_summary: newEntry.topic_summary,
-         questions: newEntry.questions
-         // id dan created_at biasanya auto-generated di Supabase
-      });
-
-      if (error) {
-        throw new Error(`Supabase Insert Error: ${error.message} (${error.code})`);
-      }
-      
-      console.log("Saved to Supabase successfully.");
-
-    } catch (err) {
-      console.error("CRITICAL: Failed to save to Supabase.", err);
-      // FALLBACK: Jangan biarkan user kehilangan data. Simpan ke Local Storage.
-      alert("Gagal menyimpan ke Supabase. Menyimpan ke Local Storage sebagai backup.");
-      saveToLocalStorage(newEntry);
+    if (sbConfig) {
+      MikirCloud.quiz.create(sbConfig, newEntry).catch(console.warn);
     }
 
-  } else {
-    // Local Storage Mode
-    saveToLocalStorage(newEntry);
+  } catch (err) {
+    console.error("Save Error:", err);
   }
 };
 
 export const getSavedQuizzes = async (): Promise<any[]> => {
-  const provider = getStorageProvider();
-
-  if (provider === 'supabase') {
-    const sbConfig = getSupabaseConfig();
-    if (!sbConfig) {
-       // Fallback read local if config missing
-       const rawHistory = localStorage.getItem(HISTORY_KEY);
-       return rawHistory ? JSON.parse(rawHistory) : [];
-    }
-
-    try {
-      const supabase = getSupabaseClient(sbConfig.url, sbConfig.key);
-      const { data, error } = await supabase
-        .from('generated_quizzes')
-        .select('*')
-        .order('created_at', { ascending: false });
-      
-      if (error) {
-        console.error("Supabase Read Error:", error);
-        throw error;
-      }
-
-      // Map Supabase (snake_case) result to App UI (camelCase) format
-      return data.map(item => ({
-        id: item.id,
-        fileName: item.file_name,
-        modelId: item.model_id,
-        mode: item.mode,
-        date: item.created_at,
-        questionCount: Array.isArray(item.questions) ? item.questions.length : 0,
-        topicSummary: item.topic_summary,
-        questions: item.questions,
-        folder: item.folder
-      }));
-
-    } catch (e) {
-      console.warn("Supabase read failed, showing empty or local list?", e);
-      // Option: Fallback to local list or return empty
-      return [];
-    }
-
-  } else {
-    try {
-      const rawHistory = localStorage.getItem(HISTORY_KEY);
-      return rawHistory ? JSON.parse(rawHistory) : [];
-    } catch (e) {
-      return [];
-    }
-  }
+  try {
+    const rawHistory = localStorage.getItem(HISTORY_KEY);
+    return rawHistory ? JSON.parse(rawHistory) : [];
+  } catch (e) { return []; }
 };
 
 export const deleteQuiz = async (id: number | string) => {
-  const provider = getStorageProvider();
-
-  if (provider === 'supabase') {
-     const sbConfig = getSupabaseConfig();
-     if (!sbConfig) return;
-     
-     try {
-       const supabase = getSupabaseClient(sbConfig.url, sbConfig.key);
-       await supabase.from('generated_quizzes').delete().eq('id', id);
-     } catch (e) {
-       console.error("Delete failed", e);
-     }
-  } else {
-     const rawHistory = localStorage.getItem(HISTORY_KEY);
-     if (rawHistory) {
-       const history = JSON.parse(rawHistory);
-       const newHistory = history.filter((item: any) => item.id !== id);
-       localStorage.setItem(HISTORY_KEY, JSON.stringify(newHistory));
-     }
+  const rawHistory = localStorage.getItem(HISTORY_KEY);
+  if (rawHistory) {
+    const history = JSON.parse(rawHistory);
+    const newHistory = history.filter((item: any) => String(item.id) !== String(id));
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(newHistory));
   }
-}
+};
 
-export const renameQuiz = (id: number | string, newName: string) => {
-  // Rename is currently Local Only feature in this version 
-  // Implementing Rename for Supabase requires an UPDATE query
+export const renameQuiz = async (id: number | string, newName: string) => {
   const rawHistory = localStorage.getItem(HISTORY_KEY);
   if (rawHistory) {
     const history = JSON.parse(rawHistory);
     const newHistory = history.map((item: any) => 
-      item.id === id ? { ...item, fileName: newName, file_name: newName } : item
+      String(item.id) === String(id) ? { ...item, fileName: newName, file_name: newName } : item
     );
     localStorage.setItem(HISTORY_KEY, JSON.stringify(newHistory));
   }
 };
 
-export const moveQuizToFolder = (id: number | string, folderName: string | undefined) => {
-  // Folder logic is purely local in this version as schema doesn't have folder_id
+export const updateLocalQuizQuestions = async (id: number | string, newQuestions: Question[]) => {
   const rawHistory = localStorage.getItem(HISTORY_KEY);
   if (rawHistory) {
     const history = JSON.parse(rawHistory);
     const newHistory = history.map((item: any) => 
-      item.id === id ? { ...item, folder: folderName } : item
+      String(item.id) === String(id) ? { ...item, questions: newQuestions, questionCount: newQuestions.length } : item
+    );
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(newHistory));
+  }
+};
+
+export const updateHistoryStats = async (id: number | string, score: number) => {
+  const rawHistory = localStorage.getItem(HISTORY_KEY);
+  if (rawHistory) {
+    const history = JSON.parse(rawHistory);
+    const newHistory = history.map((item: any) => 
+      String(item.id) === String(id) ? { ...item, lastScore: score, lastPlayed: new Date().toISOString() } : item
     );
     localStorage.setItem(HISTORY_KEY, JSON.stringify(newHistory));
   }
 };
 
 export const clearHistory = async () => {
-  const provider = getStorageProvider();
-  
-  if (provider === 'supabase') {
-    console.warn("Bulk delete disabled for Supabase.");
-    alert("Hapus semua dinonaktifkan untuk Supabase demi keamanan.");
-  } else {
+  if (confirm("Hapus semua riwayat di MEJA KERJA (Local)? Data di Cloud aman.")) {
     localStorage.removeItem(HISTORY_KEY);
-    localStorage.removeItem(FOLDERS_KEY);
+  }
+};
+
+// --- CLOUD OPERATIONS (Delegated to MikirCloud) ---
+
+export const uploadToCloud = async (quiz: any) => {
+  const sbConfig = getSupabaseConfig();
+  if (!sbConfig) throw new Error("Supabase belum dikonfigurasi.");
+  
+  const payload = {
+    ...quiz,
+    fileName: quiz.fileName || quiz.file_name,
+    topicSummary: quiz.topicSummary || quiz.topic_summary
+  };
+  
+  return await MikirCloud.quiz.create(sbConfig, payload);
+};
+
+export const fetchCloudQuizzes = async () => {
+  const sbConfig = getSupabaseConfig();
+  if (!sbConfig) return [];
+  return await MikirCloud.quiz.list(sbConfig);
+};
+
+export const deleteFromCloud = async (cloudId: number | string) => {
+  const sbConfig = getSupabaseConfig();
+  if (!sbConfig) return;
+  return await MikirCloud.quiz.delete(sbConfig, cloudId);
+};
+
+export const updateCloudQuizQuestions = async (cloudId: number | string, newQuestions: Question[]) => {
+  const sbConfig = getSupabaseConfig();
+  if (!sbConfig) throw new Error("Supabase config missing");
+  return await MikirCloud.quiz.updateQuestions(sbConfig, cloudId, newQuestions);
+};
+
+export const fetchNotesFromSupabase = async (): Promise<CloudNote[]> => {
+  const sbConfig = getSupabaseConfig();
+  if (!sbConfig) return [];
+  return await MikirCloud.notes.list(sbConfig);
+};
+
+// --- UTILS ---
+export const downloadFromCloud = async (cloudQuiz: any) => {
+  try {
+    // 1. Data Cleaning
+    // Ensure questions is an Array, not stringified JSON
+    let safeQuestions = cloudQuiz.questions;
+    if (typeof safeQuestions === 'string') {
+        try { safeQuestions = JSON.parse(safeQuestions); } catch (e) { safeQuestions = []; }
+    }
+    
+    // 2. Create Clean Local Object
+    // Generate NEW ID to prevent collision with existing data
+    const localQuiz = { 
+        ...cloudQuiz, 
+        id: Date.now(), 
+        isCloud: false, 
+        questions: safeQuestions || [] 
+    };
+
+    // 3. Save to Local Storage directly
+    const rawHistory = localStorage.getItem(HISTORY_KEY);
+    const history = rawHistory ? JSON.parse(rawHistory) : [];
+    
+    // Prevent duplicate download logic (optional, based on filename + count)
+    // For now we allow duplicates but with new IDs
+    
+    history.unshift(localQuiz);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+    
+    return true;
+  } catch (error) {
+    console.error("Download failed:", error);
+    throw new Error("Gagal menyimpan data ke Local Storage.");
   }
 };

@@ -9,15 +9,15 @@ import { SettingsScreen } from './components/SettingsScreen';
 import { HistoryScreen } from './components/HistoryScreen';
 import { VirtualRoom } from './components/VirtualRoom';
 import { Navigation } from './components/Navigation';
-import { LoginGate } from './components/LoginGate'; // IMPORT
+import { LoginGate } from './components/LoginGate'; 
 
 import { generateQuiz } from './services/geminiService';
 import { generateQuizGroq } from './services/groqService';
-import { saveGeneratedQuiz, getApiKey } from './services/storageService'; 
+import { saveGeneratedQuiz, getApiKey, updateHistoryStats, getSavedQuizzes, deleteQuiz } from './services/storageService'; 
 import { checkAndTriggerNotification } from './services/notificationService';
 import { notifyQuizReady } from './services/kaomojiNotificationService'; 
 import { initTheme } from './services/themeService'; 
-import { getKeycardSession } from './services/keycardService'; // IMPORT
+import { getKeycardSession } from './services/keycardService'; 
 import { QuizState, Question, QuizResult, ModelConfig, QuizMode, AppView } from './types';
 import { Info } from 'lucide-react';
 
@@ -32,6 +32,7 @@ const App: React.FC = () => {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [originalQuestions, setOriginalQuestions] = useState<Question[]>([]);
   const [result, setResult] = useState<QuizResult | null>(null);
+  const [activeQuizId, setActiveQuizId] = useState<string | number | null>(null); 
   
   // UI Status State
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -58,8 +59,6 @@ const App: React.FC = () => {
     const groqKey = getApiKey('groq');
     
     // If we have ANY key, we unlock the app.
-    // The previous logic forced user to Settings if no key.
-    // Now we force them to LoginGate if no key.
     if (geminiKey || groqKey) {
        setIsLocked(false);
     } else {
@@ -119,10 +118,14 @@ const App: React.FC = () => {
       // Trigger Notification ( •_•)
       notifyQuizReady(generatedQuestions.length);
 
-      // Save History (Wait for it to ensure it's saved before switching UI completely)
+      // Save History and get the approximate ID (Timestamp based)
       setLoadingStatus("Menyimpan Quiz...");
       try {
         await saveGeneratedQuiz(file, config, generatedQuestions);
+        // Little hack: Since we just saved it, the ID is Date.now(). 
+        // We'll just grab the latest from localstorage for tracking stats.
+        const latest = await getSavedQuizzes();
+        if (latest.length > 0) setActiveQuizId(latest[0].id);
       } catch (saveError) {
         console.error("Non-fatal error saving quiz:", saveError);
       }
@@ -147,6 +150,7 @@ const App: React.FC = () => {
         setQuestions(json.questions);
         setOriginalQuestions(json.questions);
         setActiveMode(QuizMode.STANDARD);
+        setActiveQuizId(null); // Imported external files don't map to history ID easily yet
         setErrorMsg(null);
         setResult(null);
         setQuizState(QuizState.QUIZ_ACTIVE);
@@ -162,19 +166,11 @@ const App: React.FC = () => {
     setQuestions(savedQuiz.questions);
     setOriginalQuestions(savedQuiz.questions);
     setActiveMode(savedQuiz.mode);
+    setActiveQuizId(savedQuiz.id);
     setErrorMsg(null);
+    setResult(null);
+    setQuizState(QuizState.QUIZ_ACTIVE);
     
-    // Dummy Result for review
-    const dummyResult: QuizResult = {
-        correctCount: 0,
-        totalQuestions: savedQuiz.questions.length,
-        score: 0,
-        mode: savedQuiz.mode,
-        answers: [] 
-    };
-
-    setResult(dummyResult);
-    setQuizState(QuizState.RESULTS);
     setCurrentView(AppView.GENERATOR);
   };
 
@@ -182,6 +178,7 @@ const App: React.FC = () => {
      setQuestions(mixedQuestions);
      setOriginalQuestions(mixedQuestions);
      setActiveMode(QuizMode.STANDARD);
+     setActiveQuizId(null); 
      setErrorMsg(null);
      setResult(null);
      setQuizState(QuizState.QUIZ_ACTIVE);
@@ -190,11 +187,24 @@ const App: React.FC = () => {
   const handleQuizComplete = (finalResult: QuizResult) => {
     setResult(finalResult);
     setQuizState(QuizState.RESULTS);
+    
+    // UPDATE HISTORY STATS (Score)
+    if (activeQuizId) {
+       const percentage = Math.round((finalResult.correctCount / finalResult.totalQuestions) * 100);
+       updateHistoryStats(activeQuizId, percentage);
+    }
   };
 
   const handleExitQuiz = () => {
      setQuizState(QuizState.CONFIG);
      setCurrentView(AppView.GENERATOR);
+  };
+
+  const handleDeleteActiveQuiz = async () => {
+    if (activeQuizId) {
+       await deleteQuiz(activeQuizId);
+    }
+    resetApp();
   };
 
   const handleContinueQuiz = () => {
@@ -216,7 +226,7 @@ const App: React.FC = () => {
   };
 
   const handleRetryAll = () => {
-    setQuestions(originalQuestions); // Restore full question set
+    setQuestions(originalQuestions); 
     setResult(null);
     setQuizState(QuizState.QUIZ_ACTIVE);
   };
@@ -226,6 +236,7 @@ const App: React.FC = () => {
     setOriginalQuestions([]);
     setResult(null);
     setErrorMsg(null);
+    setActiveQuizId(null);
     setQuizState(QuizState.CONFIG);
   };
 
@@ -239,7 +250,15 @@ const App: React.FC = () => {
     if (quizState === QuizState.PROCESSING) return <LoadingScreen status={loadingStatus} />;
     
     if (quizState === QuizState.QUIZ_ACTIVE) {
-        return <QuizInterface questions={questions} mode={activeMode} onComplete={handleQuizComplete} onExit={handleExitQuiz} />;
+        return (
+          <QuizInterface 
+            questions={questions} 
+            mode={activeMode} 
+            onComplete={handleQuizComplete} 
+            onExit={handleExitQuiz}
+            onDelete={activeQuizId ? handleDeleteActiveQuiz : undefined} // Pass delete handler
+          />
+        );
     }
     
     if (quizState === QuizState.RESULTS && result) {
@@ -250,6 +269,7 @@ const App: React.FC = () => {
               onReset={resetApp} 
               onRetryMistakes={handleRetryMistakes}
               onRetryAll={handleRetryAll}
+              onDelete={activeQuizId ? handleDeleteActiveQuiz : undefined} // Pass delete handler
             />
         );
     }

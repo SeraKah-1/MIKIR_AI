@@ -1,3 +1,4 @@
+
 import { useCallback, useRef, useEffect } from 'react';
 
 // Singleton AudioContext to prevent "Max AudioContexts reached" crash
@@ -64,16 +65,31 @@ export const useGameSound = () => {
     }
   }, []);
 
-  const playClick = useCallback(() => playTone(800, 'sine', 0.1, 0.05), [playTone]);
+  // --- HAPTIC FEEDBACK (VIBRATION) ---
+  const triggerHaptic = useCallback((pattern: number | number[] = 10) => {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      navigator.vibrate(pattern);
+    }
+  }, []);
+
+  const playClick = useCallback(() => {
+    playTone(800, 'sine', 0.1, 0.05);
+    triggerHaptic(5); // Light tap
+  }, [playTone, triggerHaptic]);
+
   const playHover = useCallback(() => playTone(200, 'triangle', 0.05, 0.02), [playTone]);
 
   const playCorrect = useCallback(() => {
     setTimeout(() => playTone(600, 'sine', 0.1, 0.1), 0);
     setTimeout(() => playTone(800, 'sine', 0.1, 0.1), 100);
     setTimeout(() => playTone(1200, 'sine', 0.3, 0.1), 200);
-  }, [playTone]);
+    triggerHaptic([10, 30, 10]); // Double tap for success
+  }, [playTone, triggerHaptic]);
 
-  const playIncorrect = useCallback(() => playTone(150, 'sawtooth', 0.3, 0.1, 50), [playTone]);
+  const playIncorrect = useCallback(() => {
+    playTone(150, 'sawtooth', 0.3, 0.1, 50);
+    triggerHaptic(50); // Heavy buzz for error
+  }, [playTone, triggerHaptic]);
 
   const playFanfare = useCallback(() => {
     const delay = 100;
@@ -81,7 +97,13 @@ export const useGameSound = () => {
       setTimeout(() => playTone(freq, 'square', 0.2, 0.05), i * delay);
     });
     setTimeout(() => playTone(1046.50, 'square', 0.6, 0.05), 4 * delay);
-  }, [playTone]);
+    triggerHaptic([50, 50, 50, 50, 200]);
+  }, [playTone, triggerHaptic]);
 
-  return { playClick, playHover, playCorrect, playIncorrect, playFanfare };
+  const playSwipe = useCallback(() => {
+    playTone(400, 'sine', 0.1, 0.05, 200); // Swoosh sound
+    triggerHaptic(15);
+  }, [playTone, triggerHaptic]);
+
+  return { playClick, playHover, playCorrect, playIncorrect, playFanfare, playSwipe, triggerHaptic };
 };

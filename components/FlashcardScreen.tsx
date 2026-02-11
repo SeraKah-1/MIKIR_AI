@@ -1,9 +1,10 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { RotateCw, ArrowLeft, ArrowRight, X, Clock, ThumbsUp, AlertCircle, Keyboard, BrainCircuit } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { motion, AnimatePresence, useMotionValue, useTransform, PanInfo } from 'framer-motion';
+import { RotateCw, X, ThumbsUp, AlertCircle, Keyboard, BrainCircuit, Hand } from 'lucide-react';
 import { Question } from '../types';
-import { processCardReview, getNextReviewText, addQuestionToSRS } from '../services/srsService';
+import { processCardReview, addQuestionToSRS } from '../services/srsService';
+import { useGameSound } from '../hooks/useGameSound';
 
 interface FlashcardScreenProps {
   questions: Question[];
@@ -13,200 +14,215 @@ interface FlashcardScreenProps {
 export const FlashcardScreen: React.FC<FlashcardScreenProps> = ({ questions, onClose }) => {
   const [index, setIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
-  const [isAnimating, setIsAnimating] = useState(false);
+  const [exitX, setExitX] = useState<number | null>(null); // To track swipe exit direction
+  
+  const { playClick, playSwipe, triggerHaptic } = useGameSound();
 
-  // Initialize SRS for these cards if not present
+  // Framer Motion Values for Swipe Logic
+  const x = useMotionValue(0);
+  const rotate = useTransform(x, [-200, 200], [-25, 25]); // Rotate card while dragging
+  const opacity = useTransform(x, [-200, -100, 0, 100, 200], [0.5, 1, 1, 1, 0.5]); 
+  
+  // Background color hints based on drag position
+  const bgOverlayOpacity = useTransform(x, [-150, 0, 150], [0.4, 0, 0.4]);
+  const bgOverlayColor = useTransform(x, [-150, 0, 150], [
+    "rgba(244, 63, 94, 1)", // Red (Hard) on Left
+    "rgba(255, 255, 255, 0)", 
+    "rgba(16, 185, 129, 1)" // Green (Easy) on Right
+  ]);
+
+  // Initialize SRS
   useEffect(() => {
     questions.forEach(q => addQuestionToSRS(q));
   }, [questions]);
 
-  // SRS Logic
+  // Handle Swipe End
+  const handleDragEnd = (event: any, info: PanInfo) => {
+    const threshold = 100;
+    if (info.offset.x > threshold) {
+      handleReview('easy'); // Swipe Right
+    } else if (info.offset.x < -threshold) {
+      handleReview('hard'); // Swipe Left
+    } else {
+      // Reset position if not swiped far enough
+      triggerHaptic(5); 
+    }
+  };
+
   const handleReview = useCallback((difficulty: 'hard' | 'good' | 'easy') => {
-    if(isAnimating) return;
+    if (exitX !== null) return; // Prevent double trigger
+    
+    playSwipe();
+    
+    // Set exit animation direction
+    if (difficulty === 'easy') setExitX(200);
+    else if (difficulty === 'hard') setExitX(-200);
+    else setExitX(0); // Good stays or handled differently? Let's treat 'good' as swipe up (optional) or button click
     
     const currentQ = questions[index];
     
-    // Map difficulty to Quality (SM-2)
-    // Hard = 3, Good = 4, Easy = 5
     let quality = 3;
     if (difficulty === 'good') quality = 4;
     if (difficulty === 'easy') quality = 5;
 
-    const result = processCardReview(currentQ, quality);
-    console.log(`Reviewed. Next due in ${result.interval} days.`);
+    processCardReview(currentQ, quality);
     
-    // Flip back first, then change
-    setIsFlipped(false);
-    setIsAnimating(true);
+    // Animate out, then load next
     setTimeout(() => {
       if (index < questions.length - 1) {
           setIndex((prev) => prev + 1);
+          setIsFlipped(false);
+          x.set(0); // Reset motion value
+          setExitX(null);
       } else {
-          // End of deck
           alert("Sesi Review Selesai! Kartu telah dijadwalkan ulang.");
           onClose();
       }
-      setIsAnimating(false);
-    }, 300); // Wait for flip animation
-  }, [index, questions, isAnimating, onClose]);
+    }, 200); 
+  }, [index, questions, onClose, playSwipe, exitX, x]);
 
   const handleFlip = useCallback(() => {
-    if(!isAnimating) setIsFlipped(prev => !prev);
-  }, [isAnimating]);
-
-  const handleNext = useCallback(() => {
-     if(isAnimating) return;
-     if (index >= questions.length - 1) return;
-
-     if(isFlipped) {
-       setIsFlipped(false);
-       setIsAnimating(true);
-       setTimeout(() => {
-          setIndex((prev) => prev + 1);
-          setIsAnimating(false);
-       }, 300);
-     } else {
-       setIndex((prev) => prev + 1);
-     }
-  }, [questions.length, isFlipped, isAnimating, index]);
-
-  const handlePrev = useCallback(() => {
-     if(isAnimating) return;
-     if (index <= 0) return;
-
-     if(isFlipped) {
-       setIsFlipped(false);
-       setIsAnimating(true);
-       setTimeout(() => {
-          setIndex((prev) => prev - 1);
-          setIsAnimating(false);
-       }, 300);
-     } else {
-       setIndex((prev) => prev - 1);
-     }
-  }, [questions.length, isFlipped, isAnimating, index]);
+    if (exitX === null) {
+      triggerHaptic(10);
+      setIsFlipped(prev => !prev);
+    }
+  }, [exitX, triggerHaptic]);
 
   // Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
-      if (e.key === ' ' || e.key === 'Enter') {
+      if (e.key === ' ' || e.key === 'Enter' || e.key === 'ArrowUp') {
          e.preventDefault();
          handleFlip();
       }
-      if (e.key === 'ArrowRight') handleNext();
-      if (e.key === 'ArrowLeft') handlePrev();
-
-      // Only work if flipped (showing answer)
-      if (isFlipped) {
-        if (e.key === '1') handleReview('hard');
-        if (e.key === '2') handleReview('good');
-        if (e.key === '3') handleReview('easy');
-      }
+      if (e.key === 'ArrowRight') handleReview('easy');
+      if (e.key === 'ArrowLeft') handleReview('hard');
+      if (e.key === 'ArrowDown') handleReview('good');
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isFlipped, handleReview, handleFlip, handleNext, handlePrev, onClose]);
+  }, [isFlipped, handleReview, handleFlip, onClose]);
 
   const currentQ = questions[index];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/95 backdrop-blur-md">
-      <div className="w-full max-w-2xl relative">
-        <button 
-          onClick={onClose}
-          className="absolute -top-12 right-0 text-white hover:text-indigo-200 transition-colors bg-white/10 p-2 rounded-full backdrop-blur-md"
-        >
-          <X size={24} />
-        </button>
-
-        <div className="text-center mb-6">
-          <h2 className="text-2xl font-bold text-white tracking-wide flex items-center justify-center">
-            <BrainCircuit className="mr-2 text-indigo-400" /> Review Mode
-          </h2>
-          <p className="text-white/70 flex items-center justify-center gap-2">
-            Card {index + 1} of {questions.length}
-            <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded text-white/50 flex items-center">
-               <Keyboard size={10} className="mr-1" /> Space to Flip
-            </span>
-          </p>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/95 backdrop-blur-md overflow-hidden">
+      <div className="w-full max-w-xl relative flex flex-col h-full max-h-[700px]">
+        
+        {/* HEADER */}
+        <div className="flex justify-between items-center mb-4 pt-4">
+           <div className="flex flex-col">
+              <h2 className="text-xl font-bold text-white flex items-center">
+                <BrainCircuit className="mr-2 text-indigo-400" /> Review
+              </h2>
+              <p className="text-white/50 text-xs">{index + 1} / {questions.length}</p>
+           </div>
+           <button 
+             onClick={onClose}
+             className="text-white/70 hover:text-white bg-white/10 p-2 rounded-full"
+           >
+             <X size={20} />
+           </button>
         </div>
 
-        {/* Card Container with Perspective */}
-        <div className="relative h-[450px] w-full perspective-1000 cursor-pointer group" onClick={handleFlip}>
+        {/* SWIPE AREA */}
+        <div className="flex-1 relative perspective-1000 flex items-center justify-center">
+          
+          {/* Card Stack Effect (Dummy Card Behind) */}
+          {index < questions.length - 1 && (
+            <div className="absolute inset-4 top-6 bg-white/5 rounded-[2rem] border border-white/5 scale-95 opacity-50 z-0" />
+          )}
+
           <motion.div
-            className="w-full h-full relative preserve-3d"
-            animate={{ rotateY: isFlipped ? 180 : 0 }}
-            transition={{ type: "spring", stiffness: 260, damping: 20 }}
-            style={{ transformStyle: "preserve-3d" }}
+            className="w-full h-full max-h-[500px] relative cursor-grab active:cursor-grabbing z-10"
+            style={{ x, rotate, opacity }}
+            drag={true}
+            dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }} // Constraints set to 0 to snap back, but dragElastic allows movement
+            dragElastic={0.7}
+            onDragEnd={handleDragEnd}
+            animate={exitX !== null ? { x: exitX * 5, opacity: 0 } : { x: 0, opacity: 1 }}
           >
-            {/* FRONT (Question) */}
-            <div 
-              className="absolute inset-0 backface-hidden bg-white rounded-[2rem] p-8 flex flex-col items-center justify-center text-center shadow-2xl border border-indigo-100"
-              style={{ backfaceVisibility: "hidden" }}
-            >
-              <span className="text-xs font-bold text-indigo-500 bg-indigo-50 px-3 py-1 rounded-full mb-6">QUESTION</span>
-              <h3 className="text-xl md:text-2xl font-medium text-slate-800 leading-snug">
-                {currentQ.text}
-              </h3>
-              <p className="mt-8 text-slate-400 text-sm flex items-center animate-pulse">
-                <RotateCw size={14} className="mr-2" /> Tap to reveal answer
-              </p>
-            </div>
+             {/* Dynamic Overlay Color for Feedback */}
+             <motion.div 
+               className="absolute inset-0 rounded-[2rem] z-20 pointer-events-none border-4"
+               style={{ backgroundColor: bgOverlayColor, opacity: bgOverlayOpacity, borderColor: bgOverlayColor }} 
+             />
 
-            {/* BACK (Answer) */}
-            <div 
-              className="absolute inset-0 backface-hidden bg-slate-900 rounded-[2rem] p-8 flex flex-col items-center justify-between text-center shadow-2xl border border-slate-700 text-white"
-              style={{ 
-                backfaceVisibility: "hidden", 
-                transform: "rotateY(180deg)" 
-              }}
-            >
-              <div className="w-full flex-1 flex flex-col justify-center">
-                <span className="text-xs font-bold text-emerald-300 bg-emerald-900/50 px-3 py-1 rounded-full mb-4 inline-block mx-auto">ANSWER</span>
-                <h3 className="text-2xl font-bold mb-4 text-emerald-400">
-                  {currentQ.options[currentQ.correctIndex]}
-                </h3>
-                <div className="w-20 h-px bg-slate-700 mx-auto mb-4" />
-                <p className="text-slate-300 text-sm leading-relaxed overflow-y-auto max-h-[120px] custom-scrollbar px-2">
-                  {currentQ.explanation}
-                </p>
-              </div>
+             {/* CARD CONTENT */}
+             <motion.div
+                className="w-full h-full relative preserve-3d transition-all duration-300"
+                animate={{ rotateY: isFlipped ? 180 : 0 }}
+                transition={{ type: "spring", stiffness: 260, damping: 20 }}
+                style={{ transformStyle: "preserve-3d" }}
+                onClick={handleFlip}
+             >
+                {/* FRONT */}
+                <div 
+                  className="absolute inset-0 backface-hidden bg-white rounded-[2rem] p-8 flex flex-col items-center justify-center text-center shadow-2xl border border-indigo-100 select-none"
+                  style={{ backfaceVisibility: "hidden" }}
+                >
+                  <span className="text-xs font-bold text-indigo-500 bg-indigo-50 px-3 py-1 rounded-full mb-6">PERTANYAAN</span>
+                  <h3 className="text-xl md:text-2xl font-medium text-slate-800 leading-snug">
+                    {currentQ.text}
+                  </h3>
+                  <div className="mt-auto pt-8 text-slate-400 text-xs flex items-center animate-pulse">
+                    <Hand size={14} className="mr-2" /> Tap to Flip
+                  </div>
+                </div>
 
-              {/* SRS Controls */}
-              <div className="grid grid-cols-3 gap-3 w-full mt-4 border-t border-slate-800 pt-4" onClick={(e) => e.stopPropagation()}>
-                <button onClick={() => handleReview('hard')} className="flex flex-col items-center p-3 rounded-2xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 transition-all group active:scale-95">
-                   <div className="flex items-center space-x-1 mb-1">
-                      <AlertCircle size={14} className="text-rose-400" />
-                      <span className="text-xs font-bold text-rose-200">Hard</span>
-                   </div>
-                   <span className="text-[10px] text-rose-400 opacity-70">~1 Day</span>
-                </button>
-                
-                <button onClick={() => handleReview('good')} className="flex flex-col items-center p-3 rounded-2xl bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 transition-all group active:scale-95">
-                   <div className="flex items-center space-x-1 mb-1">
-                      <Clock size={14} className="text-blue-400" />
-                      <span className="text-xs font-bold text-blue-200">Good</span>
-                   </div>
-                   <span className="text-[10px] text-blue-400 opacity-70">~3 Days</span>
-                </button>
-                
-                <button onClick={() => handleReview('easy')} className="flex flex-col items-center p-3 rounded-2xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 transition-all group active:scale-95">
-                   <div className="flex items-center space-x-1 mb-1">
-                      <ThumbsUp size={14} className="text-emerald-400" />
-                      <span className="text-xs font-bold text-emerald-200">Easy</span>
-                   </div>
-                   <span className="text-[10px] text-emerald-400 opacity-70">~7 Days</span>
-                </button>
-              </div>
-            </div>
+                {/* BACK */}
+                <div 
+                  className="absolute inset-0 backface-hidden bg-slate-800 rounded-[2rem] p-8 flex flex-col items-center text-center shadow-2xl border border-slate-700 text-white select-none"
+                  style={{ 
+                    backfaceVisibility: "hidden", 
+                    transform: "rotateY(180deg)" 
+                  }}
+                >
+                  <span className="text-xs font-bold text-emerald-300 bg-emerald-900/50 px-3 py-1 rounded-full mb-4">JAWABAN</span>
+                  <h3 className="text-xl font-bold mb-4 text-emerald-400">
+                    {currentQ.options[currentQ.correctIndex]}
+                  </h3>
+                  <div className="w-16 h-px bg-slate-600 mb-4" />
+                  <p className="text-slate-300 text-sm leading-relaxed overflow-y-auto custom-scrollbar flex-1">
+                    {currentQ.explanation}
+                  </p>
+                </div>
+             </motion.div>
           </motion.div>
+
+          {/* SWIPE INDICATORS (Visual Hints) */}
+          <div className="absolute left-4 top-1/2 -translate-y-1/2 text-rose-500/50 pointer-events-none hidden md:block">
+             <AlertCircle size={48} />
+             <p className="font-bold text-xs uppercase -ml-2 mt-2">Lupa / Hard</p>
+          </div>
+          <div className="absolute right-4 top-1/2 -translate-y-1/2 text-emerald-500/50 pointer-events-none hidden md:block">
+             <ThumbsUp size={48} />
+             <p className="font-bold text-xs uppercase -ml-1 mt-2">Ingat / Easy</p>
+          </div>
+        </div>
+
+        {/* CONTROLS (Buttons for fallback/desktop) */}
+        <div className="mt-6 grid grid-cols-3 gap-4">
+           <button onClick={() => handleReview('hard')} className="flex flex-col items-center p-3 rounded-2xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 transition-colors active:scale-95">
+              <AlertCircle size={20} className="mb-1" />
+              <span className="text-xs font-bold">Hard</span>
+           </button>
+           <button onClick={() => handleReview('good')} className="flex flex-col items-center p-3 rounded-2xl bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 transition-colors active:scale-95">
+              <RotateCw size={20} className="mb-1" />
+              <span className="text-xs font-bold">Good</span>
+           </button>
+           <button onClick={() => handleReview('easy')} className="flex flex-col items-center p-3 rounded-2xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 transition-colors active:scale-95">
+              <ThumbsUp size={20} className="mb-1" />
+              <span className="text-xs font-bold">Easy</span>
+           </button>
         </div>
         
-        <div className="text-center mt-6 text-white/30 text-xs">
-           Spaced Repetition System Active
+        <div className="text-center mt-4 text-white/30 text-[10px] flex items-center justify-center gap-4">
+           <span className="flex items-center"><Keyboard size={10} className="mr-1"/> Keys: ← Hard | ↓ Good | → Easy</span>
         </div>
+
       </div>
     </div>
   );

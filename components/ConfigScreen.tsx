@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Upload, FileText, Layout, Zap, TrendingUp, Skull, BookOpen, BrainCircuit, Briefcase, Target, Type, Cpu, Download, PlayCircle, Cloud, RefreshCw, Layers } from 'lucide-react';
+import { Upload, FileText, Layout, Zap, TrendingUp, Skull, BookOpen, BrainCircuit, Briefcase, Target, Type, Cpu, Download, PlayCircle, Cloud, RefreshCw, Layers, X, Edit3 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AVAILABLE_MODELS, ModelConfig, QuizMode, ExamStyle, AiProvider, CloudNote, Question } from '../types';
 import { GlassButton } from './GlassButton';
@@ -21,7 +21,10 @@ interface ConfigScreenProps {
 export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onImport, onContinue, hasActiveSession }) => {
   const [inputMethod, setInputMethod] = useState<'file' | 'topic' | 'cloud'>('file');
   const [file, setFile] = useState<File | null>(null);
-  const [topic, setTopic] = useState('');
+  
+  // Topic state is now used for ALL modes as the "Quiz Title/Focus"
+  const [topic, setTopic] = useState(''); 
+  
   const [cloudNotes, setCloudNotes] = useState<CloudNote[]>([]);
   const [selectedNote, setSelectedNote] = useState<CloudNote | null>(null);
   const [isLoadingNotes, setIsLoadingNotes] = useState(false);
@@ -72,12 +75,18 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onImport, o
       } else {
         setFile(droppedFile);
         setInputMethod('file');
+        // Auto-fill topic with filename for convenience, but user can edit
+        setTopic(droppedFile.name.replace(/\.[^/.]+$/, "")); 
       }
     }
   };
 
   const handleChangeFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) setFile(e.target.files[0]);
+    if (e.target.files && e.target.files[0]) {
+       const f = e.target.files[0];
+       setFile(f);
+       setTopic(f.name.replace(/\.[^/.]+$/, ""));
+    }
   };
 
   const handleImportFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -97,23 +106,48 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onImport, o
     if (notes.length === 0) alert("Tidak ada catatan ditemukan.");
   };
 
+  const handleSelectNote = (note: CloudNote) => {
+    setSelectedNote(note);
+    // Pre-fill the topic input with the note title, allowing user to edit it
+    setTopic(note.title); 
+  };
+
   const handleStart = () => {
+    // Validation
     if (inputMethod === 'file' && !file) return;
     if (inputMethod === 'topic' && !topic.trim()) return;
     if (inputMethod === 'cloud' && !selectedNote) return;
 
-    let finalTopic = topic;
+    let finalTopicPrompt = topic;
+
+    // Logic Construction based on Input Method
     if (inputMethod === 'cloud' && selectedNote) {
-       finalTopic = `Title: ${selectedNote.title}\n\nContent:\n${selectedNote.content}`;
+       // Combine User's Title + Note Content
+       finalTopicPrompt = `Fokus Topik: ${topic}\n\nReferensi Materi:\n${selectedNote.content}`;
+    } 
+    else if (inputMethod === 'file') {
+       // For file, usually just the file content is enough, but we can pass topic as hint if needed.
+       // The geminiService handles file + topic combination if topic is passed.
     }
 
     onStart(
       inputMethod === 'file' ? file : null, 
-      { provider, modelId, questionCount, mode, examStyle, topic: (inputMethod === 'topic' || inputMethod === 'cloud') ? finalTopic : undefined }
+      { 
+        provider, 
+        modelId, 
+        questionCount, 
+        mode, 
+        examStyle, 
+        topic: finalTopicPrompt // This is what gets sent to AI
+      }
     );
   };
 
-  const isReady = (inputMethod === 'file' && file) || (inputMethod === 'topic' && topic.trim().length > 3) || (inputMethod === 'cloud' && selectedNote);
+  // Check if ready to start
+  const isReady = 
+    (inputMethod === 'file' && file) || 
+    (inputMethod === 'topic' && topic.trim().length > 3) || 
+    (inputMethod === 'cloud' && selectedNote && topic.trim().length > 0);
 
   const modes = [
     { id: QuizMode.STANDARD, label: 'Standard', icon: <Layout size={20} />, info: "Santai, tanpa timer." },
@@ -186,19 +220,21 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onImport, o
 
         {/* INPUT TABS - SOLID BACKGROUND */}
         <div className="flex p-1 bg-theme-bg rounded-2xl mb-8 w-fit mx-auto border border-theme-border flex-wrap justify-center shadow-sm">
-          <button onClick={() => setInputMethod('file')} className={`flex items-center space-x-2 px-4 md:px-6 py-2 rounded-xl transition-all ${inputMethod === 'file' ? 'bg-theme-primary text-white shadow-md font-bold' : 'text-theme-muted hover:text-theme-text hover:bg-theme-glass'}`}>
+          <button onClick={() => { setInputMethod('file'); setTopic(''); }} className={`flex items-center space-x-2 px-4 md:px-6 py-2 rounded-xl transition-all ${inputMethod === 'file' ? 'bg-theme-primary text-white shadow-md font-bold' : 'text-theme-muted hover:text-theme-text hover:bg-theme-glass'}`}>
             <Upload size={18} /> <span>File</span>
           </button>
-          <button onClick={() => setInputMethod('topic')} className={`flex items-center space-x-2 px-4 md:px-6 py-2 rounded-xl transition-all ${inputMethod === 'topic' ? 'bg-theme-primary text-white shadow-md font-bold' : 'text-theme-muted hover:text-theme-text hover:bg-theme-glass'}`}>
+          <button onClick={() => { setInputMethod('topic'); setTopic(''); }} className={`flex items-center space-x-2 px-4 md:px-6 py-2 rounded-xl transition-all ${inputMethod === 'topic' ? 'bg-theme-primary text-white shadow-md font-bold' : 'text-theme-muted hover:text-theme-text hover:bg-theme-glass'}`}>
             <Type size={18} /> <span>Topik</span>
           </button>
-          <button onClick={() => { setInputMethod('cloud'); if(cloudNotes.length === 0) handleFetchNotes(); }} className={`flex items-center space-x-2 px-4 md:px-6 py-2 rounded-xl transition-all ${inputMethod === 'cloud' ? 'bg-theme-primary text-white shadow-md font-bold' : 'text-theme-muted hover:text-theme-text hover:bg-theme-glass'}`}>
+          <button onClick={() => { setInputMethod('cloud'); setTopic(''); if(cloudNotes.length === 0) handleFetchNotes(); }} className={`flex items-center space-x-2 px-4 md:px-6 py-2 rounded-xl transition-all ${inputMethod === 'cloud' ? 'bg-theme-primary text-white shadow-md font-bold' : 'text-theme-muted hover:text-theme-text hover:bg-theme-glass'}`}>
             <Cloud size={18} /> <span>Notes</span>
           </button>
         </div>
 
         {/* INPUT AREA */}
-        <div className="mb-8 min-h-[160px]">
+        <div className="mb-8">
+          
+          {/* 1. FILE INPUT */}
           {inputMethod === 'file' && (
             <motion.div 
               initial={{ opacity: 0 }} animate={{ opacity: 1 }}
@@ -215,6 +251,7 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onImport, o
             </motion.div>
           )}
 
+          {/* 2. TOPIC INPUT (MANUAL) */}
           {inputMethod === 'topic' && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
               <textarea 
@@ -226,23 +263,64 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onImport, o
             </motion.div>
           )}
 
+          {/* 3. CLOUD NOTES INPUT (UPDATED FLOW) */}
           {inputMethod === 'cloud' && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="h-56 bg-theme-bg/50 border border-theme-border rounded-3xl p-4 overflow-hidden flex flex-col">
-               <div className="flex justify-between items-center mb-3 px-2">
-                 <h3 className="text-sm font-bold flex items-center text-theme-muted"><Cloud size={16} className="mr-2" /> Pilih Catatan</h3>
-                 <button onClick={handleFetchNotes} disabled={isLoadingNotes} className="p-1.5 hover:bg-theme-bg rounded-lg text-theme-muted transition-colors"><RefreshCw size={16} className={isLoadingNotes ? "animate-spin" : ""} /></button>
-               </div>
-               <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
-                  {cloudNotes.length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center text-theme-muted text-xs text-center px-4"><p>Tidak ada catatan.</p></div>
-                  ) : (
-                    cloudNotes.map(note => (
-                       <button key={note.id} onClick={() => setSelectedNote(note)} className={`w-full text-left p-3 rounded-xl border transition-all text-sm ${selectedNote?.id === note.id ? 'bg-theme-primary/10 border-theme-primary text-theme-primary font-bold' : 'bg-theme-bg/40 border-theme-border text-theme-text hover:border-theme-primary/50'}`}>
-                          <div className="truncate">{note.title || "Tanpa Judul"}</div>
-                       </button>
-                    ))
-                  )}
-               </div>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+               {/* If Note Selected: Show Selected Card + Title Editor */}
+               {selectedNote ? (
+                  <div className="space-y-4">
+                     <div className="flex items-center justify-between bg-theme-primary/10 border border-theme-primary/30 p-4 rounded-2xl">
+                        <div className="flex items-center gap-3 overflow-hidden">
+                           <div className="p-2 bg-theme-primary text-white rounded-lg"><BookOpen size={20} /></div>
+                           <div className="min-w-0">
+                              <p className="text-xs text-theme-primary font-bold uppercase tracking-wider">Sumber Materi</p>
+                              <p className="font-medium truncate text-sm">{selectedNote.title || "Catatan Tanpa Judul"}</p>
+                           </div>
+                        </div>
+                        <button onClick={() => { setSelectedNote(null); setTopic(''); }} className="p-2 hover:bg-white/50 rounded-full transition-colors text-theme-muted hover:text-rose-500">
+                           <X size={18} />
+                        </button>
+                     </div>
+
+                     <div className="relative">
+                        <label className="text-xs font-bold text-theme-muted uppercase tracking-wider ml-1 mb-1 block">Judul Kuis (Editable)</label>
+                        <input 
+                           type="text"
+                           value={topic}
+                           onChange={(e) => setTopic(e.target.value)}
+                           className="w-full bg-theme-bg/50 border border-theme-border rounded-2xl px-4 py-4 pr-10 text-theme-text font-medium focus:ring-2 focus:ring-theme-primary focus:outline-none"
+                           placeholder="Tentukan judul kuis..."
+                        />
+                        <Edit3 size={16} className="absolute right-4 top-9 text-theme-muted opacity-50" />
+                     </div>
+                  </div>
+               ) : (
+                 /* If No Note Selected: Show List */
+                 <div className="h-64 bg-theme-bg/50 border border-theme-border rounded-3xl p-4 overflow-hidden flex flex-col">
+                    <div className="flex justify-between items-center mb-3 px-2">
+                      <h3 className="text-sm font-bold flex items-center text-theme-muted"><Cloud size={16} className="mr-2" /> Pilih Catatan</h3>
+                      <button onClick={handleFetchNotes} disabled={isLoadingNotes} className="p-1.5 hover:bg-theme-bg rounded-lg text-theme-muted transition-colors"><RefreshCw size={16} className={isLoadingNotes ? "animate-spin" : ""} /></button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
+                        {cloudNotes.length === 0 ? (
+                          <div className="h-full flex flex-col items-center justify-center text-theme-muted text-xs text-center px-4">
+                             <p>Tidak ada catatan.</p>
+                             <button onClick={handleFetchNotes} className="mt-2 text-theme-primary font-bold hover:underline">Refresh</button>
+                          </div>
+                        ) : (
+                          cloudNotes.map(note => (
+                            <button key={note.id} onClick={() => handleSelectNote(note)} className="w-full text-left p-3 rounded-xl border bg-theme-bg/40 border-theme-border text-theme-text hover:border-theme-primary/50 hover:bg-white/50 transition-all text-sm group">
+                                <div className="font-medium truncate group-hover:text-theme-primary transition-colors">{note.title || "Tanpa Judul"}</div>
+                                <div className="text-[10px] text-theme-muted opacity-60 mt-1 flex justify-between">
+                                   <span>{new Date(note.created_at).toLocaleDateString()}</span>
+                                   {note.tags && note.tags.length > 0 && <span>#{note.tags[0]}</span>}
+                                </div>
+                            </button>
+                          ))
+                        )}
+                    </div>
+                 </div>
+               )}
             </motion.div>
           )}
         </div>

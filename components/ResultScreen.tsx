@@ -1,7 +1,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { RefreshCw, Download, RotateCcw, Share2, Layers, FileJson, Activity, Trophy, Brain, Zap, Target, BookOpen, PlayCircle } from 'lucide-react';
+import { RefreshCw, Download, RotateCcw, Share2, Layers, FileJson, Activity, Trophy, Brain, Zap, Target, BookOpen, PlayCircle, Trash2 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { QuizResult, Question, SkillAnalysis } from '../types';
 import { GlassButton } from './GlassButton';
@@ -15,6 +15,7 @@ interface ResultScreenProps {
   onReset: () => void;
   onRetryMistakes: () => void;
   onRetryAll: () => void;
+  onDelete?: () => void; // Added Prop
 }
 
 // Sub-component for a single skill bar
@@ -38,7 +39,7 @@ const SkillBar: React.FC<{ label: string; score: number; icon: any; color: strin
   </div>
 );
 
-export const ResultScreen: React.FC<ResultScreenProps> = ({ result, questions, onReset, onRetryMistakes, onRetryAll }) => {
+export const ResultScreen: React.FC<ResultScreenProps> = ({ result, questions, onReset, onRetryMistakes, onRetryAll, onDelete }) => {
   const percentage = Math.round((result.correctCount / result.totalQuestions) * 100);
   const { playFanfare, playClick } = useGameSound();
   const [showFlashcards, setShowFlashcards] = useState(false);
@@ -156,15 +157,6 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ result, questions, o
     a.click();
   };
 
-  const handleChallenge = () => {
-    const isSupabase = getStorageProvider() === 'supabase';
-    if (isSupabase) {
-       alert("Challenge Link generated! (Simulasi: share URL aplikasi ini ke teman)");
-    } else {
-       alert("Untuk menggunakan Challenge Link, aktifkan Supabase di Settings terlebih dahulu.");
-    }
-  };
-
   return (
     <div className="max-w-4xl mx-auto px-4 pb-20">
       
@@ -259,9 +251,11 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ result, questions, o
              <button onClick={handleExportJSON} className="flex items-center justify-center p-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold transition-colors">
                <FileJson size={14} className="mr-2" /> Save JSON
              </button>
-             <button onClick={handleDownloadText} className="flex items-center justify-center p-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold transition-colors">
-               <Download size={14} className="mr-2" /> Save Text
-             </button>
+             {onDelete && (
+                <button onClick={onDelete} className="flex items-center justify-center p-3 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-bold transition-colors">
+                  <Trash2 size={14} className="mr-2" /> Buang Quiz
+                </button>
+             )}
           </div>
         </motion.div>
       </div>

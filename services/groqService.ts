@@ -1,3 +1,4 @@
+
 /**
  * ==========================================
  * GROQ CLOUD SERVICE
@@ -8,17 +9,45 @@ import { Question, QuizMode, ExamStyle } from "../types";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
-// Helper to clean JSON string from Markdown code blocks
+// Helper to clean JSON string aggressively
 const cleanJSON = (text: string) => {
-  // Remove markdown code blocks
+  // 1. Remove markdown code blocks
   let cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
   
-  // Sometimes models add explanations at the start/end, try to find the array or object
-  const firstBrace = cleaned.indexOf('{');
-  const lastBrace = cleaned.lastIndexOf('}');
+  // 2. Scan for the first '[' or '{' to ignore intro text
+  const firstSquare = cleaned.indexOf('[');
+  const firstCurly = cleaned.indexOf('{');
   
-  if (firstBrace !== -1 && lastBrace !== -1) {
-    cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+  // Logic: find which comes first, assuming one exists
+  let startIndex = -1;
+  if (firstSquare !== -1 && firstCurly !== -1) {
+    startIndex = Math.min(firstSquare, firstCurly);
+  } else if (firstSquare !== -1) {
+    startIndex = firstSquare;
+  } else if (firstCurly !== -1) {
+    startIndex = firstCurly;
+  }
+
+  // If found start, slice from there
+  if (startIndex !== -1) {
+    cleaned = cleaned.substring(startIndex);
+  }
+
+  // 3. Scan for the last ']' or '}'
+  const lastSquare = cleaned.lastIndexOf(']');
+  const lastCurly = cleaned.lastIndexOf('}');
+  
+  let endIndex = -1;
+  if (lastSquare !== -1 && lastCurly !== -1) {
+    endIndex = Math.max(lastSquare, lastCurly);
+  } else if (lastSquare !== -1) {
+    endIndex = lastSquare;
+  } else if (lastCurly !== -1) {
+    endIndex = lastCurly;
+  }
+
+  if (endIndex !== -1) {
+    cleaned = cleaned.substring(0, endIndex + 1);
   }
   
   return cleaned;
@@ -213,7 +242,7 @@ export const generateQuizGroq = async (
     2. NO METADATA QUESTIONS: Do NOT ask about the author, the document title, page numbers, or "What is this document about?".
     3. CONTENT ONLY: Ask ONLY about the subject matter (Physics, Biology, Law, etc.) found within the text.
     4. LANGUAGE: Output in INDONESIAN (Bahasa Indonesia).
-    5. FORMAT: Return ONLY raw JSON. Do NOT wrap in markdown blocks.
+    5. FORMAT: Return ONLY raw JSON. Do NOT wrap in markdown blocks. Do NOT include any intro text.
     
     EXAM SPECS:
     - Count: Exactly ${questionCount} questions.
@@ -280,7 +309,7 @@ export const generateQuizGroq = async (
 
     let rawQuestions: any[] = [];
     
-    // Normalization logic
+    // Normalization logic (Handle array or object wrapper)
     if (Array.isArray(rawData)) {
       rawQuestions = rawData;
     } 

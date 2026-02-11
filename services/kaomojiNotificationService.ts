@@ -20,27 +20,63 @@ const KAOMOJI = {
 // Request permission helper
 export const requestKaomojiPermission = async (): Promise<boolean> => {
     if (!("Notification" in window)) return false;
-    if (Notification.permission === "granted") return true;
-    if (Notification.permission !== "denied") {
-        const permission = await Notification.requestPermission();
-        return permission === "granted";
+    
+    try {
+        if (Notification.permission === "granted") return true;
+        if (Notification.permission !== "denied") {
+            const permission = await Notification.requestPermission();
+            return permission === "granted";
+        }
+    } catch (e) {
+        console.warn("Notification permission request failed (Mobile restriction?)", e);
+        return false;
     }
     return false;
 };
 
-// Generic sender
+// Generic sender with Safe Guard
 const sendKaomojiNotify = (title: string, body: string, tag?: string) => {
+    // 1. Check basic support
+    if (!("Notification" in window)) return;
+
+    // 2. Check permission
     if (Notification.permission === "granted") {
-        // Check visibility: Only notify if tab is hidden OR it's a major event
-        // But for "Quiz Ready", we always want to know.
-        new Notification(title, {
-            body: body,
-            icon: "https://cdn-icons-png.flaticon.com/512/3767/3767084.png", // Study icon
-            tag: tag, // Tag prevents spamming the same notification
-            requireInteraction: false
-        });
+        try {
+            // 3. Try ServiceWorker method first (Standard for PWA/Mobile)
+            if ('serviceWorker' in navigator && navigator.serviceWorker.ready) {
+                navigator.serviceWorker.ready.then(registration => {
+                    registration.showNotification(title, {
+                        body: body,
+                        icon: "https://cdn-icons-png.flaticon.com/512/3767/3767084.png",
+                        tag: tag,
+                        requireInteraction: false
+                    });
+                }).catch(() => {
+                    // Fallback to Constructor if SW fails
+                    fallbackNotify(title, body, tag);
+                });
+            } else {
+                // Fallback to Constructor (Desktop)
+                fallbackNotify(title, body, tag);
+            }
+        } catch (e) {
+            console.warn("Notification failed to trigger:", e);
+        }
     }
 };
+
+const fallbackNotify = (title: string, body: string, tag?: string) => {
+    try {
+        new Notification(title, {
+            body: body,
+            icon: "https://cdn-icons-png.flaticon.com/512/3767/3767084.png", 
+            tag: tag,
+            requireInteraction: false
+        });
+    } catch (e) {
+        console.warn("new Notification() illegal constructor on this device.");
+    }
+}
 
 // --- SPECIFIC TRIGGERS ---
 

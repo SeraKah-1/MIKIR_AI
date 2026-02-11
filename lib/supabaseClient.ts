@@ -1,26 +1,49 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// We create a function to get the client because the URL/Key can change dynamically 
-// based on user settings in local storage.
+// Cache container untuk menyimpan instance client
+let clientInstance: SupabaseClient | null = null;
+let cachedUrl: string | null = null;
+let cachedKey: string | null = null;
+
+/**
+ * Mendapatkan atau membuat instance Supabase Client.
+ * Menggunakan pola Singleton: jika URL/Key sama, pakai client yang sudah ada.
+ */
 export const getSupabaseClient = (url: string, key: string): SupabaseClient => {
-  // 1. Basic Validation / Cleaning
   const cleanUrl = url.trim();
   const cleanKey = key.trim();
 
-  if (!cleanUrl.startsWith('http')) {
-    throw new Error("Supabase URL harus dimulai dengan https://");
+  if (!cleanUrl || !cleanKey) {
+    throw new Error("Supabase URL dan Key tidak boleh kosong.");
   }
 
-  try {
-    return createClient(cleanUrl, cleanKey, {
-      auth: {
-        persistSession: false, // Penting untuk Anon usage tanpa login user
-        autoRefreshToken: false,
-      }
-    });
-  } catch (err) {
-    console.error("Supabase Client Init Error:", err);
-    throw new Error("Konfigurasi Supabase tidak valid.");
+  // Jika kredensial berubah, reset instance
+  if (cleanUrl !== cachedUrl || cleanKey !== cachedKey) {
+    clientInstance = null;
   }
+
+  if (!clientInstance) {
+    try {
+      clientInstance = createClient(cleanUrl, cleanKey, {
+        auth: {
+          persistSession: false, // Kita pakai mode 'Anon' / Public Key
+          autoRefreshToken: false,
+          detectSessionInUrl: false
+        },
+        global: {
+          headers: { 'x-application-name': 'mikir-app' }
+        }
+      });
+      
+      // Update cache
+      cachedUrl = cleanUrl;
+      cachedKey = cleanKey;
+    } catch (err) {
+      console.error("Gagal inisialisasi Supabase:", err);
+      throw new Error("Format URL/Key Supabase tidak valid.");
+    }
+  }
+
+  return clientInstance;
 };

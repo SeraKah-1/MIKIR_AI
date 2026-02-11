@@ -38,15 +38,14 @@ export interface Question {
   difficulty: 'Easy' | 'Medium' | 'Hard';
 }
 
-// New Interface for SRS Data
 export interface SRSData {
-  id: string; // Hash of the question text
+  id: string; 
   question: Question;
-  interval: number; // Days until next review
-  repetition: number; // How many times reviewed correctly in a row
-  easeFactor: number; // SM-2 Ease factor (default 2.5)
-  dueDate: number; // Timestamp
-  lastReviewed: number; // Timestamp
+  interval: number; 
+  repetition: number; 
+  easeFactor: number; 
+  dueDate: number; 
+  lastReviewed: number; 
 }
 
 export interface QuizResult {
@@ -65,19 +64,17 @@ export interface SkillAnalysis {
   analysis: string; 
 }
 
-// Interface for Cloud Notes integration
 export interface CloudNote {
-  id: number;
-  title: string;
+  id: string | number; // Updated to support UUID/Text IDs from neuro_notes
+  title: string;       // Mapped from 'topic'
   content: string;
-  created_at: string;
-  tags?: string[];
+  created_at: string;  // Mapped from 'timestamp'
+  tags?: string[];     // Mapped from 'mode' + 'provider'
 }
 
 export type AiProvider = 'gemini' | 'groq';
 export type StorageProvider = 'local' | 'supabase';
 
-// KEYCARD INTERFACES - UPDATED FOR FLEXIBILITY
 export interface KeycardData {
   version: string;
   metadata: {
@@ -87,15 +84,11 @@ export interface KeycardData {
     valid_domain?: string;
   };
   config: {
-    // Allows creating a "Master Card" with both keys
     geminiKey?: string;
     groqKey?: string;
     preferredProvider?: AiProvider;
-    
-    // Database Config
     supabaseUrl?: string;
     supabaseKey?: string;
-    
     customPrompt?: string; 
   };
 }

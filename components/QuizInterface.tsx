@@ -1,22 +1,54 @@
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Check, ArrowRight, ArrowLeft, Clock, Heart, Flame, Sparkles, Lightbulb, Volume2, Mic, Bot, LogOut } from 'lucide-react';
+import { Check, ArrowRight, ArrowLeft, Clock, Heart, Flame, Sparkles, Lightbulb, Volume2, Mic, LogOut, Terminal, AlertTriangle, Trash2, MicOff } from 'lucide-react';
 import { Question, QuizResult, QuizMode } from '../types';
 import { GlassButton } from './GlassButton';
 import { useGameSound } from '../hooks/useGameSound';
-import { explainQuestionDeeper } from '../services/geminiService';
-import { getApiKey } from '../services/storageService';
+import { useVoiceControl } from '../hooks/useVoiceControl'; // NEW IMPORT
+import { VoiceFeedback } from './VoiceFeedback'; // NEW IMPORT
+import confetti from 'canvas-confetti';
 
-// --- Utility: Formatted Text Renderer (Markdown-like) ---
+// --- Utility: Enhanced Formatted Text Renderer (NON-RECURSIVE / SAFE MODE) ---
 const FormattedText: React.FC<{ text: string; className?: string }> = ({ text, className = "" }) => {
-  const parts = text.split(/(\*\*.*?\*\*)/g);
+  if (!text) return null;
+  const safeText = String(text);
+
+  // 1. Split by Code Blocks first (```...```)
+  const blockParts = safeText.split(/(```[\s\S]*?```)/g);
+
   return (
-    <span className={className}>
-      {parts.map((part, i) => {
-        if (part.startsWith('**') && part.endsWith('**')) {
-           return <strong key={i} className="font-bold text-indigo-900">{part.slice(2, -2)}</strong>;
+    <span className={`block ${className}`}>
+      {blockParts.map((part, i) => {
+        // A. Handle Code Blocks
+        if (part.startsWith('```') && part.endsWith('```')) {
+          const content = part.slice(3, -3).trim();
+          return (
+            <div key={i} className="bg-slate-900 text-emerald-400 font-mono text-sm p-4 rounded-xl overflow-x-auto shadow-inner border border-slate-700 my-2 text-left">
+              <div className="flex items-center text-slate-500 mb-2 text-xs border-b border-slate-700 pb-1">
+                 <Terminal size={12} className="mr-1" /> Code Snippet
+              </div>
+              <pre className="whitespace-pre-wrap break-words leading-relaxed">{content}</pre>
+            </div>
+          );
         }
-        return <span key={i}>{part}</span>;
+
+        // B. Handle Inline Text (Bold & Code)
+        const inlineParts = part.split(/(\*\*.*?\*\*|`[^`]+`)/g);
+
+        return (
+          <span key={i}>
+            {inlineParts.map((frag, j) => {
+               if (frag.startsWith('**') && frag.endsWith('**') && frag.length > 4) {
+                  return <strong key={j} className="font-bold text-indigo-900">{frag.slice(2, -2)}</strong>;
+               }
+               if (frag.startsWith('`') && frag.endsWith('`') && frag.length > 2) {
+                  return <code key={j} className="font-mono text-sm bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded border border-indigo-100">{frag.slice(1, -1)}</code>;
+               }
+               return <span key={j}>{frag}</span>;
+            })}
+          </span>
+        );
       })}
     </span>
   );
@@ -46,22 +78,16 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
 }) => {
   const { playHover, playClick } = useGameSound();
   const [speaking, setSpeaking] = useState(false);
-  
-  const [aiExplanation, setAiExplanation] = useState<string | null>(null);
-  const [isLoadingAI, setIsLoadingAI] = useState(false);
 
   useEffect(() => {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
+    const synth = window.speechSynthesis;
+    if (synth) {
+      synth.cancel();
     }
     setSpeaking(false);
-    setAiExplanation(null);
-    setIsLoadingAI(false);
     
     return () => {
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-      }
+      if (synth) synth.cancel();
     };
   }, [question?.id]);
 
@@ -69,8 +95,9 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
     e.stopPropagation();
     if (!('speechSynthesis' in window)) return;
 
+    const synth = window.speechSynthesis;
     if (speaking) {
-      window.speechSynthesis.cancel();
+      synth.cancel();
       setSpeaking(false);
       return;
     }
@@ -82,31 +109,20 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
     const utterance = new SpeechSynthesisUtterance(textToSpeak);
     utterance.lang = 'id-ID'; 
     utterance.rate = 1.0;
-    utterance.pitch = 1.0;
-
+    
     utterance.onend = () => setSpeaking(false);
     utterance.onerror = () => setSpeaking(false);
 
-    window.speechSynthesis.speak(utterance);
+    synth.speak(utterance);
   };
 
-  const handleDeepDive = async () => {
-    const key = getApiKey();
-    if (!key) return;
-
-    setIsLoadingAI(true);
-    playClick();
-    try {
-      const explanation = await explainQuestionDeeper(key, question);
-      setAiExplanation(explanation);
-    } catch (e) {
-      setAiExplanation("Gagal memuat penjelasan.");
-    } finally {
-      setIsLoadingAI(false);
-    }
-  };
-
-  if (!question) return null;
+  if (!question || !question.options) return (
+     <div className="bg-white/50 backdrop-blur-xl p-8 rounded-[2rem] text-center text-slate-500 border border-slate-200">
+        <AlertTriangle className="mx-auto mb-2 text-amber-500" />
+        <p>Memuat Kartu Soal...</p>
+        <p className="text-xs opacity-50 mt-1">Data sedang disiapkan...</p>
+     </div>
+  );
 
   const cardVariants = {
     hidden: { opacity: 0, x: 50, scale: 0.95 },
@@ -119,7 +135,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
     visible: (i: number) => ({ opacity: 1, y: 0, transition: { delay: i * 0.05 } }),
   };
 
-  const safeOptions = Array.isArray(question.options) ? question.options : ["Error: Invalid Options"];
+  const safeOptions = Array.isArray(question.options) ? question.options : ["Error: Invalid Options Data"];
   const shortcuts = ['1', '2', '3', '4'];
 
   return (
@@ -133,7 +149,6 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
     >
       <div className="bg-white/50 backdrop-blur-2xl border border-white/80 rounded-[2rem] p-6 md:p-10 shadow-xl shadow-indigo-500/10 relative">
         
-        {/* Key Point Badge */}
         <div className="flex justify-center mb-6">
            <span className="inline-flex items-center px-4 py-1.5 rounded-full bg-indigo-50 border border-indigo-100 text-indigo-600 text-xs font-bold uppercase tracking-wider shadow-sm">
              <Sparkles size={12} className="mr-2" />
@@ -141,7 +156,6 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
            </span>
         </div>
 
-        {/* TTS Button */}
         <button 
           onClick={speakQuestion}
           className={`
@@ -150,15 +164,13 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
           `}
           title="Bacakan Soal"
         >
-          {speaking ? <Volume2 size={20} /> : <Mic size={20} />}
+          {speaking ? <Volume2 size={20} /> : <Volume2 size={20} className="opacity-50" />}
         </button>
 
-        {/* Question Text */}
-        <h2 className="text-xl md:text-2xl font-medium text-slate-800 text-center mb-8 leading-snug tracking-tight px-8">
+        <h2 className="text-xl md:text-2xl font-medium text-slate-800 text-center mb-8 leading-snug tracking-tight px-2 md:px-8">
           <FormattedText text={question.text} />
         </h2>
 
-        {/* Options */}
         <div className="grid grid-cols-1 gap-3">
           {safeOptions.map((option, idx) => {
             let styles = "bg-white/70 border-white/60 text-slate-600 hover:bg-white hover:border-indigo-200";
@@ -189,7 +201,6 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
                   ${styles}
                 `}
               >
-                {/* Keyboard Shortcut Hint */}
                 <span className={`
                   hidden md:flex items-center justify-center w-6 h-6 rounded-md text-xs font-bold mr-4 border transition-colors
                   ${isAnswered 
@@ -199,7 +210,6 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
                   {shortcuts[idx]}
                 </span>
 
-                {/* Option Text */}
                 <span className="flex-1 text-center md:text-left">
                   <FormattedText text={typeof option === 'object' ? JSON.stringify(option) : option} />
                 </span>
@@ -213,7 +223,6 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
         </div>
       </div>
 
-      {/* Feedback Panel */}
       <AnimatePresence>
         {isAnswered && (
           <motion.div
@@ -221,7 +230,6 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
             animate={{ opacity: 1, y: 0 }}
             className="mt-6 space-y-4"
           >
-            {/* Main Explanation */}
             <div className={`
               rounded-3xl p-6 border-2 
               ${selectedOption === question.correctIndex 
@@ -236,41 +244,11 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
                    <h3 className="font-bold text-slate-800 text-lg mb-1">
                      {selectedOption === question.correctIndex ? "Tepat Sekali!" : "Pembahasan"}
                    </h3>
-                   <p className="text-slate-600 text-sm leading-relaxed whitespace-pre-line">
+                   <div className="text-slate-600 text-sm leading-relaxed whitespace-pre-line">
                      <FormattedText text={question.explanation} />
-                   </p>
-
-                    {/* AI Deep Dive Button */}
-                   {!aiExplanation && !isLoadingAI && (
-                     <button 
-                      onClick={handleDeepDive}
-                      className="mt-3 flex items-center text-xs font-medium text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 px-3 py-2 rounded-xl transition-all"
-                     >
-                       <Bot size={14} className="mr-2" /> Tanya AI (Analogi Sederhana)
-                     </button>
-                   )}
+                   </div>
                  </div>
               </div>
-
-               {/* AI Deep Dive Result */}
-               {isLoadingAI && (
-                  <div className="mt-4 p-4 bg-indigo-50 rounded-xl flex items-center justify-center space-x-2 text-indigo-500 text-sm animate-pulse">
-                    <Sparkles size={16} /> <span>Sedang berpikir...</span>
-                  </div>
-               )}
-
-               {aiExplanation && (
-                 <motion.div 
-                   initial={{ opacity: 0, height: 0 }} 
-                   animate={{ opacity: 1, height: 'auto' }}
-                   className="mt-4 p-4 bg-indigo-50/50 border border-indigo-100 rounded-xl"
-                 >
-                   <div className="flex items-start gap-3">
-                     <Bot size={18} className="text-indigo-500 mt-1 shrink-0" />
-                     <p className="text-sm text-slate-700 italic"><FormattedText text={aiExplanation} /></p>
-                   </div>
-                 </motion.div>
-               )}
               
               <div className="mt-6 flex justify-end">
                 <GlassButton onClick={onNext} className={`
@@ -289,6 +267,47 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
   );
 };
 
+// --- REACTIVE MASCOT COMPONENT ---
+const QuizMascot: React.FC<{ state: 'idle' | 'happy' | 'sad' | 'streak', streak: number }> = ({ state, streak }) => {
+  let kaomoji = "( •_•)";
+  let color = "text-slate-400";
+  let bg = "bg-slate-100/50";
+
+  switch (state) {
+    case 'happy':
+      kaomoji = "( ^ ▽ ^ )";
+      color = "text-emerald-500";
+      bg = "bg-emerald-100";
+      break;
+    case 'sad':
+      kaomoji = "( > _ < )";
+      color = "text-rose-500";
+      bg = "bg-rose-100";
+      break;
+    case 'streak':
+      kaomoji = "( ⌐■_■ )";
+      color = "text-indigo-500";
+      bg = "bg-indigo-100";
+      break;
+    default:
+      kaomoji = "( •_•)";
+      color = "text-slate-400";
+      bg = "bg-slate-100/50";
+  }
+
+  return (
+     <motion.div 
+        key={state}
+        initial={{ scale: 0.8, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        className={`fixed top-24 right-4 md:right-8 z-30 px-3 py-1.5 rounded-full backdrop-blur-md border border-white/50 shadow-sm flex items-center space-x-2 ${bg}`}
+     >
+        <span className={`font-black text-sm whitespace-nowrap ${color}`}>{kaomoji}</span>
+        {streak > 2 && state !== 'sad' && <span className="text-[10px] font-bold text-slate-500">x{streak}</span>}
+     </motion.div>
+  );
+}
+
 // --- Main Container ---
 
 interface QuizInterfaceProps {
@@ -296,60 +315,57 @@ interface QuizInterfaceProps {
   mode: QuizMode;
   onComplete: (result: QuizResult) => void;
   onExit: () => void;
+  onDelete?: () => void;
 }
 
-export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, onComplete, onExit }) => {
+export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, onComplete, onExit, onDelete }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [isAnswered, setIsAnswered] = useState(false);
   const [answers, setAnswers] = useState<{ questionId: number; selectedIndex: number; isCorrect: boolean }[]>([]);
   
-  // Audio Hooks
   const { playCorrect, playIncorrect, playClick } = useGameSound();
 
-  // Gamification States
   const [streak, setStreak] = useState(0);
   const [lives, setLives] = useState(3);
   const [timeLeft, setTimeLeft] = useState(20);
+  const [mascotState, setMascotState] = useState<'idle' | 'happy' | 'sad' | 'streak'>('idle');
 
-  const currentQuestion = questions[currentIndex];
+  const currentQuestion = (questions && questions.length > 0) ? questions[currentIndex] : null;
 
-  // Timer Logic
-  useEffect(() => {
-    if (mode !== QuizMode.TIME_RUSH || isAnswered) return;
-
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          handleTimeOut();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [currentIndex, isAnswered, mode]);
-
-  useEffect(() => {
-    if (mode === QuizMode.TIME_RUSH) setTimeLeft(20);
-  }, [currentIndex, mode]);
-
-  const handleTimeOut = () => {
-    playIncorrect(); // Sound
-    handleAnswer(-1, false);
-  };
-
+  // --- LOGIC HANDLERS (Needed for Voice Control) ---
   const handleAnswer = useCallback((index: number, isCorrect: boolean) => {
+    if (!currentQuestion) return;
+    
     setSelectedOption(index);
     setIsAnswered(true);
 
-    // Play Sound
     if (isCorrect) {
       playCorrect();
+      const newStreak = streak + 1;
+      setStreak(newStreak);
+      
+      if (newStreak >= 3) {
+         setMascotState('streak');
+         if (newStreak % 3 === 0) {
+            confetti({
+              particleCount: 30,
+              spread: 60,
+              origin: { y: 0.7 },
+              colors: ['#6366f1', '#10b981', '#f43f5e']
+            });
+         }
+      } else {
+         setMascotState('happy');
+      }
+
     } else {
       playIncorrect();
+      setMascotState('sad');
+      setStreak(0);
+      if (mode === QuizMode.SURVIVAL) {
+        setLives(prev => Math.max(0, prev - 1));
+      }
     }
 
     setAnswers(prev => [...prev, { 
@@ -358,45 +374,50 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
       isCorrect 
     }]);
 
-    if (isCorrect) {
-      setStreak(prev => prev + 1);
-    } else {
-      setStreak(0);
-      if (mode === QuizMode.SURVIVAL) {
-        setLives(prev => Math.max(0, prev - 1));
-      }
-    }
-  }, [currentQuestion, mode, playCorrect, playIncorrect]);
+  }, [currentQuestion, mode, playCorrect, playIncorrect, streak]);
 
   const handleOptionSelect = useCallback((index: number) => {
-    if (isAnswered) return;
+    if (isAnswered || !currentQuestion) return;
     const isCorrect = index === currentQuestion.correctIndex;
     handleAnswer(index, isCorrect);
   }, [isAnswered, currentQuestion, handleAnswer]);
 
+  const finishQuiz = useCallback(() => {
+    const correctCount = answers.filter(a => a.isCorrect).length;
+    onComplete({
+      correctCount,
+      totalQuestions: questions.length,
+      score: correctCount * 10,
+      mode,
+      answers
+    });
+  }, [answers, onComplete, questions.length, mode]);
+
   const handleNext = useCallback(() => {
-    playClick(); // Sound for next button
+    playClick();
+    setMascotState('idle');
+
     if (mode === QuizMode.SURVIVAL && lives === 0) {
       finishQuiz();
       return;
     }
 
-    if (currentIndex < questions.length - 1) {
+    if (questions && currentIndex < questions.length - 1) {
       setCurrentIndex(prev => prev + 1);
-      setSelectedOption(null); // Reset for next question
-      setIsAnswered(false);    // Reset for next question
+      setSelectedOption(null);
+      setIsAnswered(false);
     } else {
       finishQuiz();
     }
-  }, [currentIndex, questions.length, mode, lives, playClick]);
+  }, [currentIndex, questions?.length, mode, lives, playClick, finishQuiz]);
 
   const handlePrev = useCallback(() => {
     if (currentIndex > 0) {
       playClick();
+      setMascotState('idle');
       const prevIndex = currentIndex - 1;
       setCurrentIndex(prevIndex);
       
-      // Restore state for previous question
       const prevQId = questions[prevIndex].id;
       const prevAnswer = answers.find(a => a.questionId === prevQId);
       
@@ -409,6 +430,37 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
       }
     }
   }, [currentIndex, questions, answers, playClick]);
+
+  // --- VOICE CONTROL HOOK ---
+  const { isListening, toggleListening, lastTranscript, feedbackMsg, error: voiceError, isSupported } = useVoiceControl({
+     onOptionSelect: handleOptionSelect,
+     onNext: handleNext,
+     onPrev: handlePrev,
+     isAnswered
+  });
+
+  // --- TIMER LOGIC ---
+  useEffect(() => {
+    if (mode !== QuizMode.TIME_RUSH || isAnswered || !currentQuestion) return;
+
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          playIncorrect();
+          handleAnswer(-1, false);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [currentIndex, isAnswered, mode, currentQuestion, handleAnswer, playIncorrect]);
+
+  useEffect(() => {
+    if (mode === QuizMode.TIME_RUSH) setTimeLeft(20);
+  }, [currentIndex, mode]);
 
   const jumpToQuestion = (index: number) => {
     if (mode === QuizMode.TIME_RUSH || mode === QuizMode.SURVIVAL) return;
@@ -426,38 +478,20 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
     }
   };
 
-  const finishQuiz = () => {
-    const correctCount = answers.filter(a => a.isCorrect).length;
-    onComplete({
-      correctCount,
-      totalQuestions: questions.length,
-      score: correctCount * 10,
-      mode,
-      answers
-    });
-  };
-
-  // Keyboard Shortcuts Handler
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Space for Previous
       if (e.key === ' ' || e.code === 'Space') {
-         e.preventDefault(); // Prevent scrolling
+         e.preventDefault(); 
          handlePrev();
          return;
       }
-      
-      // Enter for Next (only if answered)
       if (e.key === 'Enter') {
          if (isAnswered) handleNext();
          return;
       }
-
-      // Numbers for options
       if (['1', '2', '3', '4'].includes(e.key)) {
          if (!isAnswered) {
             const idx = parseInt(e.key) - 1;
-            // Safe check if option exists
             if (currentQuestion && idx < currentQuestion.options.length) {
                handleOptionSelect(idx);
             }
@@ -469,31 +503,65 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isAnswered, currentQuestion, handleOptionSelect, handleNext, handlePrev]);
 
-  if (!questions || questions.length === 0) {
-    return <div className="text-center p-10 text-slate-500">Error: Tidak ada soal yang dimuat.</div>;
-  }
-  if (!currentQuestion) return null;
+  const handleDeleteQuiz = () => {
+    if (onDelete && confirm("Soal jelek? Yakin mau buang kuis ini?")) {
+      onDelete();
+    }
+  };
+
+  if (!questions || questions.length === 0) return <div>Error loading quiz</div>;
+  if (!currentQuestion) return <div>Loading...</div>;
 
   return (
     <div className="max-w-3xl mx-auto px-4">
-      {/* Header Stats */}
+      <QuizMascot state={mascotState} streak={streak} />
+      
+      {/* VOICE FEEDBACK FLOATING UI */}
+      <VoiceFeedback 
+         isListening={isListening} 
+         lastTranscript={lastTranscript} 
+         feedbackMsg={feedbackMsg} 
+         error={voiceError} 
+      />
+
       <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
         
-        {/* Left Controls: Exit & Back */}
         <div className="flex items-center gap-2">
           <button 
              onClick={onExit}
-             className="p-2.5 bg-white border border-slate-200 rounded-xl text-slate-500 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition-all shadow-sm"
+             className="p-2.5 bg-white border border-slate-200 rounded-xl text-slate-500 hover:bg-slate-50 hover:text-slate-600 hover:border-slate-300 transition-all shadow-sm"
              title="Menu Utama"
           >
              <LogOut size={18} />
           </button>
           
+          {onDelete && (
+            <button 
+               onClick={handleDeleteQuiz}
+               className="p-2.5 bg-white border border-slate-200 rounded-xl text-rose-300 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition-all shadow-sm"
+               title="Buang Soal"
+            >
+               <Trash2 size={18} />
+            </button>
+          )}
+
+          <div className="w-px h-6 bg-slate-200 mx-1" />
+
+          {/* VOICE TOGGLE BUTTON */}
+          {isSupported && (
+             <button
+                onClick={toggleListening}
+                className={`p-2.5 border rounded-xl transition-all shadow-sm flex items-center gap-2 ${isListening ? 'bg-indigo-50 border-indigo-200 text-indigo-600 animate-pulse' : 'bg-white border-slate-200 text-slate-400 hover:text-slate-600'}`}
+                title="Hands-free Voice Mode"
+             >
+                {isListening ? <Mic size={18} /> : <MicOff size={18} />}
+             </button>
+          )}
+
           <button 
              onClick={handlePrev}
              disabled={currentIndex === 0}
              className={`p-2.5 bg-white border border-slate-200 rounded-xl transition-all shadow-sm ${currentIndex === 0 ? 'opacity-50 cursor-not-allowed text-slate-300' : 'text-slate-500 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200'}`}
-             title="Soal Sebelumnya (Spasi)"
           >
              <ArrowLeft size={18} />
           </button>
@@ -501,7 +569,7 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
           <div className="ml-2 bg-white/40 backdrop-blur-md px-4 py-2 rounded-2xl border border-white/50 text-slate-600 font-semibold text-sm shadow-sm">
             {currentIndex + 1} <span className="text-slate-400 font-normal">/ {questions.length}</span>
           </div>
-
+          
           <AnimatePresence>
             {streak > 1 && (
               <motion.div 
@@ -517,7 +585,7 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
           </AnimatePresence>
         </div>
 
-        {/* Navigation Dots */}
+        {/* DOTS NAVIGATION */}
         <div className="flex-1 flex justify-center flex-wrap gap-1.5 px-4 overflow-x-auto max-w-full">
            {questions.map((q, idx) => {
              const answer = answers.find(a => a.questionId === q.id);
@@ -539,11 +607,6 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
         </div>
 
         <div className="flex items-center gap-2 justify-end">
-           {/* Sound Indicator */}
-           <div className="hidden md:flex items-center justify-center w-8 h-8 rounded-full bg-indigo-50 text-indigo-400 opacity-50">
-             <Volume2 size={14} />
-           </div>
-
            {mode === QuizMode.SURVIVAL && (
             <div className="flex items-center space-x-1 bg-rose-100 text-rose-600 px-3 py-2 rounded-2xl border border-rose-200">
               <Heart size={18} className="fill-rose-500" />
