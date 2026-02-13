@@ -1,7 +1,7 @@
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence, useMotionValue, useTransform, PanInfo } from 'framer-motion';
-import { RotateCw, X, ThumbsUp, AlertCircle, Keyboard, BrainCircuit, Hand } from 'lucide-react';
+import { X, BrainCircuit, RotateCcw, Check, HelpCircle, Zap } from 'lucide-react';
 import { Question } from '../types';
 import { processCardReview, addQuestionToSRS } from '../services/srsService';
 import { useGameSound } from '../hooks/useGameSound';
@@ -11,219 +11,304 @@ interface FlashcardScreenProps {
   onClose: () => void;
 }
 
+// --- UTILS: Simple Formatter ---
+const CardText: React.FC<{ text: string }> = ({ text }) => {
+  const parts = text.split(/(\*\*.*?\*\*)/g);
+  return (
+    <span>
+      {parts.map((part, i) => {
+        if (part.startsWith('**') && part.endsWith('**')) {
+          return <strong key={i} className="font-bold text-theme-primary">{part.slice(2, -2)}</strong>;
+        }
+        return <span key={i}>{part}</span>;
+      })}
+    </span>
+  );
+};
+
 export const FlashcardScreen: React.FC<FlashcardScreenProps> = ({ questions, onClose }) => {
   const [index, setIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
-  const [exitX, setExitX] = useState<number | null>(null); // To track swipe exit direction
-  
-  const { playClick, playSwipe, triggerHaptic } = useGameSound();
+  const [exitDir, setExitDir] = useState<'left' | 'right' | 'down' | null>(null);
 
-  // Framer Motion Values for Swipe Logic
+  const { playClick, playCorrect, playIncorrect, triggerHaptic, playSwipe } = useGameSound();
+
+  // --- MOTION VALUES FOR SWIPE ---
   const x = useMotionValue(0);
-  const rotate = useTransform(x, [-200, 200], [-25, 25]); // Rotate card while dragging
-  const opacity = useTransform(x, [-200, -100, 0, 100, 200], [0.5, 1, 1, 1, 0.5]); 
+  const rotate = useTransform(x, [-200, 200], [-15, 15]); // Tilt effect
+  const opacity = useTransform(x, [-200, -100, 0, 100, 200], [0, 1, 1, 1, 0]); // Fade out logic
   
-  // Background color hints based on drag position
-  const bgOverlayOpacity = useTransform(x, [-150, 0, 150], [0.4, 0, 0.4]);
+  // Background Color Overlay (Red left, Green right)
+  const bgOverlayOpacity = useTransform(x, [-150, 0, 150], [0.2, 0, 0.2]);
   const bgOverlayColor = useTransform(x, [-150, 0, 150], [
-    "rgba(244, 63, 94, 1)", // Red (Hard) on Left
-    "rgba(255, 255, 255, 0)", 
-    "rgba(16, 185, 129, 1)" // Green (Easy) on Right
+    "rgba(244, 63, 94, 1)", // Red (Lupa)
+    "rgba(0,0,0,0)", 
+    "rgba(16, 185, 129, 1)" // Green (Paham)
   ]);
 
-  // Initialize SRS
+  // Init SRS
   useEffect(() => {
-    questions.forEach(q => addQuestionToSRS(q));
+    document.body.style.overflow = 'hidden';
+    if (questions.length > 0) questions.forEach(q => addQuestionToSRS(q));
+    return () => { document.body.style.overflow = 'unset'; };
   }, [questions]);
 
-  // Handle Swipe End
-  const handleDragEnd = (event: any, info: PanInfo) => {
-    const threshold = 100;
-    if (info.offset.x > threshold) {
-      handleReview('easy'); // Swipe Right
-    } else if (info.offset.x < -threshold) {
-      handleReview('hard'); // Swipe Left
+  // --- LOGIC ---
+
+  const handleNextCard = useCallback((rating: 'lupa' | 'ragu' | 'paham') => {
+    if (exitDir) return;
+
+    // 1. Set Animation Direction & Sound
+    if (rating === 'lupa') {
+        setExitDir('left');
+        playIncorrect();
+    } else if (rating === 'paham') {
+        setExitDir('right');
+        playCorrect();
     } else {
-      // Reset position if not swiped far enough
-      triggerHaptic(5); 
+        setExitDir('down'); // Ragu drops down
+        playClick();
+    }
+
+    triggerHaptic();
+
+    // 2. Process SRS
+    const currentQ = questions[index];
+    let quality = 3; 
+    if (rating === 'lupa') quality = 1; // Hard/Again
+    if (rating === 'ragu') quality = 3; // Hard/Pass
+    if (rating === 'paham') quality = 5; // Easy
+    
+    processCardReview(currentQ, quality);
+
+    // 3. Move Next
+    setTimeout(() => {
+        if (index < questions.length - 1) {
+            setIndex(prev => prev + 1);
+            setIsFlipped(false);
+            setExitDir(null);
+            x.set(0); 
+        } else {
+            onClose(); 
+        }
+    }, 200);
+  }, [exitDir, index, questions, onClose, playCorrect, playIncorrect, playClick, x, triggerHaptic]);
+
+  const handleFlip = useCallback(() => {
+    // Only flip if not dragging hard
+    if (Math.abs(x.get()) < 5) {
+        triggerHaptic(5);
+        setIsFlipped(prev => !prev);
+    }
+  }, [x, triggerHaptic]);
+
+  // Swipe Handler
+  const handleDragEnd = (_: any, info: PanInfo) => {
+    const threshold = 100;
+    const velocityThreshold = 500;
+
+    if (info.offset.x > threshold || info.velocity.x > velocityThreshold) {
+       handleNextCard('paham');
+    } else if (info.offset.x < -threshold || info.velocity.x < -velocityThreshold) {
+       handleNextCard('lupa');
+    } else if (info.offset.y > threshold && isFlipped) {
+       // Optional: Swipe Down for Ragu
+       handleNextCard('ragu');
     }
   };
 
-  const handleReview = useCallback((difficulty: 'hard' | 'good' | 'easy') => {
-    if (exitX !== null) return; // Prevent double trigger
-    
-    playSwipe();
-    
-    // Set exit animation direction
-    if (difficulty === 'easy') setExitX(200);
-    else if (difficulty === 'hard') setExitX(-200);
-    else setExitX(0); // Good stays or handled differently? Let's treat 'good' as swipe up (optional) or button click
-    
-    const currentQ = questions[index];
-    
-    let quality = 3;
-    if (difficulty === 'good') quality = 4;
-    if (difficulty === 'easy') quality = 5;
-
-    processCardReview(currentQ, quality);
-    
-    // Animate out, then load next
-    setTimeout(() => {
-      if (index < questions.length - 1) {
-          setIndex((prev) => prev + 1);
-          setIsFlipped(false);
-          x.set(0); // Reset motion value
-          setExitX(null);
-      } else {
-          alert("Sesi Review Selesai! Kartu telah dijadwalkan ulang.");
-          onClose();
-      }
-    }, 200); 
-  }, [index, questions, onClose, playSwipe, exitX, x]);
-
-  const handleFlip = useCallback(() => {
-    if (exitX === null) {
-      triggerHaptic(10);
-      setIsFlipped(prev => !prev);
-    }
-  }, [exitX, triggerHaptic]);
-
-  // Keyboard Shortcuts
+  // Keyboard
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
+      
+      // Navigation
       if (e.key === ' ' || e.key === 'Enter' || e.key === 'ArrowUp') {
          e.preventDefault();
-         handleFlip();
+         setIsFlipped(prev => !prev);
       }
-      if (e.key === 'ArrowRight') handleReview('easy');
-      if (e.key === 'ArrowLeft') handleReview('hard');
-      if (e.key === 'ArrowDown') handleReview('good');
+      
+      // Rating (Only allow if user wants to speed run or is checking answer)
+      if (e.key === 'ArrowLeft') handleNextCard('lupa');
+      if (e.key === 'ArrowRight') handleNextCard('paham');
+      if (e.key === 'ArrowDown') handleNextCard('ragu');
     };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [handleNextCard, onClose]);
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isFlipped, handleReview, handleFlip, onClose]);
-
+  if (!questions || questions.length === 0) return null;
   const currentQ = questions[index];
+  const progress = ((index + 1) / questions.length) * 100;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/95 backdrop-blur-md overflow-hidden">
-      <div className="w-full max-w-xl relative flex flex-col h-full max-h-[700px]">
-        
-        {/* HEADER */}
-        <div className="flex justify-between items-center mb-4 pt-4">
-           <div className="flex flex-col">
-              <h2 className="text-xl font-bold text-white flex items-center">
-                <BrainCircuit className="mr-2 text-indigo-400" /> Review
-              </h2>
-              <p className="text-white/50 text-xs">{index + 1} / {questions.length}</p>
-           </div>
-           <button 
-             onClick={onClose}
-             className="text-white/70 hover:text-white bg-white/10 p-2 rounded-full"
-           >
-             <X size={20} />
+    <div className="fixed inset-0 z-[100] bg-theme-bg/95 backdrop-blur-3xl flex flex-col items-center justify-center font-sans text-theme-text overflow-hidden touch-none">
+      
+      {/* Dynamic Background Flash */}
+      <motion.div style={{ backgroundColor: bgOverlayColor, opacity: bgOverlayOpacity }} className="absolute inset-0 pointer-events-none z-0 transition-colors" />
+
+      {/* --- HEADER --- */}
+      <div className="absolute top-0 left-0 w-full z-20 p-6 flex flex-col gap-4">
+        <div className="flex justify-between items-center w-full max-w-lg mx-auto">
+           <button onClick={onClose} className="p-2 rounded-full hover:bg-theme-text/10 text-theme-muted transition-colors">
+              <X size={24} />
            </button>
-        </div>
-
-        {/* SWIPE AREA */}
-        <div className="flex-1 relative perspective-1000 flex items-center justify-center">
-          
-          {/* Card Stack Effect (Dummy Card Behind) */}
-          {index < questions.length - 1 && (
-            <div className="absolute inset-4 top-6 bg-white/5 rounded-[2rem] border border-white/5 scale-95 opacity-50 z-0" />
-          )}
-
-          <motion.div
-            className="w-full h-full max-h-[500px] relative cursor-grab active:cursor-grabbing z-10"
-            style={{ x, rotate, opacity }}
-            drag={true}
-            dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }} // Constraints set to 0 to snap back, but dragElastic allows movement
-            dragElastic={0.7}
-            onDragEnd={handleDragEnd}
-            animate={exitX !== null ? { x: exitX * 5, opacity: 0 } : { x: 0, opacity: 1 }}
-          >
-             {/* Dynamic Overlay Color for Feedback */}
-             <motion.div 
-               className="absolute inset-0 rounded-[2rem] z-20 pointer-events-none border-4"
-               style={{ backgroundColor: bgOverlayColor, opacity: bgOverlayOpacity, borderColor: bgOverlayColor }} 
-             />
-
-             {/* CARD CONTENT */}
-             <motion.div
-                className="w-full h-full relative preserve-3d transition-all duration-300"
-                animate={{ rotateY: isFlipped ? 180 : 0 }}
-                transition={{ type: "spring", stiffness: 260, damping: 20 }}
-                style={{ transformStyle: "preserve-3d" }}
-                onClick={handleFlip}
-             >
-                {/* FRONT */}
-                <div 
-                  className="absolute inset-0 backface-hidden bg-white rounded-[2rem] p-8 flex flex-col items-center justify-center text-center shadow-2xl border border-indigo-100 select-none"
-                  style={{ backfaceVisibility: "hidden" }}
-                >
-                  <span className="text-xs font-bold text-indigo-500 bg-indigo-50 px-3 py-1 rounded-full mb-6">PERTANYAAN</span>
-                  <h3 className="text-xl md:text-2xl font-medium text-slate-800 leading-snug">
-                    {currentQ.text}
-                  </h3>
-                  <div className="mt-auto pt-8 text-slate-400 text-xs flex items-center animate-pulse">
-                    <Hand size={14} className="mr-2" /> Tap to Flip
-                  </div>
-                </div>
-
-                {/* BACK */}
-                <div 
-                  className="absolute inset-0 backface-hidden bg-slate-800 rounded-[2rem] p-8 flex flex-col items-center text-center shadow-2xl border border-slate-700 text-white select-none"
-                  style={{ 
-                    backfaceVisibility: "hidden", 
-                    transform: "rotateY(180deg)" 
-                  }}
-                >
-                  <span className="text-xs font-bold text-emerald-300 bg-emerald-900/50 px-3 py-1 rounded-full mb-4">JAWABAN</span>
-                  <h3 className="text-xl font-bold mb-4 text-emerald-400">
-                    {currentQ.options[currentQ.correctIndex]}
-                  </h3>
-                  <div className="w-16 h-px bg-slate-600 mb-4" />
-                  <p className="text-slate-300 text-sm leading-relaxed overflow-y-auto custom-scrollbar flex-1">
-                    {currentQ.explanation}
-                  </p>
-                </div>
-             </motion.div>
-          </motion.div>
-
-          {/* SWIPE INDICATORS (Visual Hints) */}
-          <div className="absolute left-4 top-1/2 -translate-y-1/2 text-rose-500/50 pointer-events-none hidden md:block">
-             <AlertCircle size={48} />
-             <p className="font-bold text-xs uppercase -ml-2 mt-2">Lupa / Hard</p>
-          </div>
-          <div className="absolute right-4 top-1/2 -translate-y-1/2 text-emerald-500/50 pointer-events-none hidden md:block">
-             <ThumbsUp size={48} />
-             <p className="font-bold text-xs uppercase -ml-1 mt-2">Ingat / Easy</p>
-          </div>
-        </div>
-
-        {/* CONTROLS (Buttons for fallback/desktop) */}
-        <div className="mt-6 grid grid-cols-3 gap-4">
-           <button onClick={() => handleReview('hard')} className="flex flex-col items-center p-3 rounded-2xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 transition-colors active:scale-95">
-              <AlertCircle size={20} className="mb-1" />
-              <span className="text-xs font-bold">Hard</span>
-           </button>
-           <button onClick={() => handleReview('good')} className="flex flex-col items-center p-3 rounded-2xl bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 transition-colors active:scale-95">
-              <RotateCw size={20} className="mb-1" />
-              <span className="text-xs font-bold">Good</span>
-           </button>
-           <button onClick={() => handleReview('easy')} className="flex flex-col items-center p-3 rounded-2xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 transition-colors active:scale-95">
-              <ThumbsUp size={20} className="mb-1" />
-              <span className="text-xs font-bold">Easy</span>
-           </button>
+           <span className="text-sm font-bold uppercase tracking-widest text-theme-text opacity-80">Flashcard</span>
+           <div className="text-xs font-mono opacity-50">{index + 1}/{questions.length}</div>
         </div>
         
-        <div className="text-center mt-4 text-white/30 text-[10px] flex items-center justify-center gap-4">
-           <span className="flex items-center"><Keyboard size={10} className="mr-1"/> Keys: ← Hard | ↓ Good | → Easy</span>
+        {/* Progress Bar */}
+        <div className="w-full max-w-lg mx-auto h-1.5 bg-slate-200/20 rounded-full overflow-hidden">
+           <motion.div 
+             className="h-full bg-theme-primary"
+             initial={{ width: 0 }}
+             animate={{ width: `${progress}%` }}
+             transition={{ duration: 0.3 }}
+           />
         </div>
-
       </div>
+
+      {/* --- CARD CONTAINER --- */}
+      <div className="relative w-full max-w-sm aspect-[3/4] md:h-[60vh] md:w-auto md:aspect-[3/4] z-10 flex items-center justify-center perspective-1000">
+         
+         {/* Background Stack Decoration */}
+         {index < questions.length - 1 && (
+             <div className="absolute inset-0 scale-[0.95] translate-y-4 bg-theme-glass border border-theme-border rounded-[2rem] -z-10 opacity-50 blur-[1px]" />
+         )}
+
+         {/* ACTIVE CARD */}
+         <motion.div
+           key={index}
+           style={{ x, rotate, opacity }}
+           drag="x" // Enable Swipe Left/Right
+           dragConstraints={{ left: 0, right: 0 }}
+           dragSnapToOrigin
+           onDragStart={playSwipe}
+           onDragEnd={handleDragEnd}
+           animate={
+              exitDir === 'left' ? { x: -500, opacity: 0, rotate: -30 } :
+              exitDir === 'right' ? { x: 500, opacity: 0, rotate: 30 } :
+              exitDir === 'down' ? { y: 200, opacity: 0 } :
+              { x: 0, y: 0, opacity: 1, rotate: 0 }
+           }
+           transition={{ duration: 0.2 }}
+           className="w-full h-full relative cursor-grab active:cursor-grabbing preserve-3d"
+         >
+            {/* 
+                FLIP ANIMATION CONTAINER 
+                This div handles the 180deg rotation.
+                It must have `transformStyle: 'preserve-3d'`
+            */}
+            <motion.div
+                className="w-full h-full relative"
+                initial={false}
+                animate={{ rotateY: isFlipped ? 180 : 0 }}
+                transition={{ duration: 0.4, type: "spring", stiffness: 260, damping: 20 }}
+                style={{ transformStyle: 'preserve-3d' }}
+                onClick={handleFlip}
+            >
+                {/* --- FRONT FACE (QUESTION) --- 
+                    Visible at 0deg. Hidden at 180deg.
+                */}
+                <div 
+                    className="absolute inset-0 bg-theme-glass backdrop-blur-xl border border-theme-border rounded-[2rem] shadow-2xl flex flex-col items-center justify-center p-8 text-center backface-hidden"
+                    style={{ backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden' }}
+                >
+                    <div className="mb-6 p-4 bg-theme-primary/10 text-theme-primary rounded-2xl">
+                        <BrainCircuit size={40} />
+                    </div>
+                    
+                    <div className="flex-1 flex items-center justify-center w-full overflow-y-auto custom-scrollbar">
+                        <h3 className="text-xl md:text-2xl font-bold leading-relaxed text-theme-text select-none">
+                            <CardText text={currentQ.text} />
+                        </h3>
+                    </div>
+
+                    <p className="mt-6 text-[10px] uppercase tracking-[0.2em] text-theme-muted font-bold animate-pulse">
+                        Tap untuk Balik
+                    </p>
+                </div>
+
+                {/* --- BACK FACE (ANSWER) --- 
+                    Visible at 180deg. Hidden at 0deg.
+                    Fix: We rotate this 180deg initially so it's "upside down" relative to the front.
+                    When the parent rotates 180deg, this becomes right-side up.
+                */}
+                <div 
+                    className="absolute inset-0 bg-theme-bg text-theme-text border border-theme-border rounded-[2rem] shadow-2xl flex flex-col p-8 overflow-hidden backface-hidden"
+                    style={{ 
+                        transform: 'rotateY(180deg)', 
+                        backfaceVisibility: 'hidden', 
+                        WebkitBackfaceVisibility: 'hidden' 
+                    }}
+                    onClick={(e) => e.stopPropagation()} 
+                >
+                    <div className="flex items-center gap-2 mb-4 opacity-70 border-b border-theme-border pb-4">
+                        <Zap size={16} className="text-emerald-500" />
+                        <span className="text-xs font-bold uppercase tracking-widest text-theme-muted">Jawaban</span>
+                    </div>
+                    
+                    <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col justify-center">
+                        <h3 className="text-xl font-bold text-emerald-600 mb-4 leading-snug">
+                            {currentQ.options[currentQ.correctIndex]}
+                        </h3>
+                        <div className="text-sm leading-relaxed text-theme-text/80">
+                            <CardText text={currentQ.explanation} />
+                        </div>
+                    </div>
+
+                    <div className="mt-4 pt-4 border-t border-theme-border flex justify-center text-theme-muted text-[10px] uppercase tracking-widest opacity-60">
+                       Swipe Kiri (Lupa) &bull; Kanan (Paham)
+                    </div>
+                </div>
+            </motion.div>
+         </motion.div>
+      </div>
+
+      {/* --- BOTTOM ACTIONS (3 Options: Lupa, Ragu, Paham) --- */}
+      <div className="absolute bottom-10 left-0 w-full px-6 flex justify-center items-end gap-6 z-50 h-24 pointer-events-none">
+          <AnimatePresence>
+            {isFlipped && (
+                <motion.div 
+                    initial={{ y: 20, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    exit={{ y: 10, opacity: 0 }}
+                    className="flex gap-4 pointer-events-auto"
+                >
+                    <button 
+                        onClick={() => handleNextCard('lupa')}
+                        className="flex flex-col items-center gap-1 group"
+                    >
+                        <div className="w-14 h-14 rounded-2xl bg-rose-50 border-2 border-rose-100 flex items-center justify-center text-rose-500 shadow-sm group-hover:scale-110 group-active:scale-95 transition-all">
+                            <HelpCircle size={24} />
+                        </div>
+                        <span className="text-[10px] font-bold text-rose-500 uppercase">Lupa</span>
+                    </button>
+
+                    <button 
+                        onClick={() => handleNextCard('ragu')}
+                        className="flex flex-col items-center gap-1 group -mt-2"
+                    >
+                        <div className="w-14 h-14 rounded-2xl bg-amber-50 border-2 border-amber-100 flex items-center justify-center text-amber-500 shadow-sm group-hover:scale-110 group-active:scale-95 transition-all">
+                            <BrainCircuit size={24} />
+                        </div>
+                        <span className="text-[10px] font-bold text-amber-500 uppercase">Ragu</span>
+                    </button>
+
+                    <button 
+                        onClick={() => handleNextCard('paham')}
+                        className="flex flex-col items-center gap-1 group"
+                    >
+                        <div className="w-14 h-14 rounded-2xl bg-emerald-50 border-2 border-emerald-100 flex items-center justify-center text-emerald-500 shadow-sm group-hover:scale-110 group-active:scale-95 transition-all">
+                            <Check size={24} strokeWidth={3} />
+                        </div>
+                        <span className="text-[10px] font-bold text-emerald-500 uppercase">Paham</span>
+                    </button>
+                </motion.div>
+            )}
+          </AnimatePresence>
+      </div>
+
     </div>
   );
 };

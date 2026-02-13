@@ -13,7 +13,7 @@ import { LoginGate } from './components/LoginGate';
 
 import { generateQuiz } from './services/geminiService';
 import { generateQuizGroq } from './services/groqService';
-import { saveGeneratedQuiz, getApiKey, updateHistoryStats, getSavedQuizzes, deleteQuiz } from './services/storageService'; 
+import { saveGeneratedQuiz, getApiKey, updateHistoryStats, getSavedQuizzes, deleteQuiz, updateLocalQuizQuestions } from './services/storageService'; 
 import { checkAndTriggerNotification } from './services/notificationService';
 import { notifyQuizReady } from './services/kaomojiNotificationService'; 
 import { initTheme } from './services/themeService'; 
@@ -33,6 +33,7 @@ const App: React.FC = () => {
   const [originalQuestions, setOriginalQuestions] = useState<Question[]>([]);
   const [result, setResult] = useState<QuizResult | null>(null);
   const [activeQuizId, setActiveQuizId] = useState<string | number | null>(null); 
+  const [lastConfig, setLastConfig] = useState<{file: File | null, config: ModelConfig} | null>(null); // For "Add More" feature
   
   // UI Status State
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -45,30 +46,19 @@ const App: React.FC = () => {
 
   // Initial Check for API Key & Notifications & Theme
   useEffect(() => {
-    // Init Theme
     initTheme();
-
-    // Check for daily reminder on app open
     checkAndTriggerNotification();
-    
     checkAuth();
   }, []);
 
   const checkAuth = () => {
     const geminiKey = getApiKey('gemini');
     const groqKey = getApiKey('groq');
-    
-    // If we have ANY key, we unlock the app.
-    if (geminiKey || groqKey) {
-       setIsLocked(false);
-    } else {
-       setIsLocked(true);
-    }
+    if (geminiKey || groqKey) setIsLocked(false);
+    else setIsLocked(true);
   };
 
-  const handleUnlock = () => {
-    setIsLocked(false);
-  };
+  const handleUnlock = () => setIsLocked(false);
 
   const startQuizGeneration = async (file: File | null, config: ModelConfig) => {
     const apiKey = getApiKey(config.provider);
@@ -78,65 +68,130 @@ const App: React.FC = () => {
       return;
     }
 
-    setQuizState(QuizState.PROCESSING);
+    // 1. UPDATE STATE IMMEDIATELY to show loading screen
+    setLoadingStatus(file ? "Membaca Dokumen..." : "Menganalisis Topik...");
+    setQuizState(QuizState.PROCESSING); 
     setErrorMsg(null);
     setActiveMode(config.mode);
-    setLoadingStatus(file ? "Membaca Dokumen..." : "Menganalisis Topik...");
+    setLastConfig({ file, config }); 
 
-    try {
-      let generatedQuestions: Question[] = [];
+    // 2. Perform Async Op wrapped in setTimeout to yield control to React Render
+    // This fixes the "White Screen" freeze by ensuring the loading screen renders first.
+    setTimeout(async () => {
+        try {
+          let generatedQuestions: Question[] = [];
 
-      if (config.provider === 'gemini') {
-        const result = await generateQuiz(
-          apiKey,
-          file,
-          config.topic,
-          config.modelId, 
-          config.questionCount, 
-          config.mode,
-          config.examStyle,
-          (status) => setLoadingStatus(status)
-        );
-        generatedQuestions = result.questions;
-      } else {
-        const result = await generateQuizGroq(
-          apiKey,
-          file,
-          config.topic,
-          config.modelId,
-          config.questionCount,
-          config.mode,
-          config.examStyle,
-          (status) => setLoadingStatus(status)
-        );
-        generatedQuestions = result.questions;
-      }
+          if (config.provider === 'gemini') {
+            const result = await generateQuiz(
+              apiKey,
+              file,
+              config.topic,
+              config.modelId, 
+              config.questionCount, 
+              config.mode,
+              config.examStyle,
+              (status) => setLoadingStatus(status)
+            );
+            generatedQuestions = result.questions;
+          } else {
+            const result = await generateQuizGroq(
+              apiKey,
+              file,
+              config.topic,
+              config.modelId,
+              config.questionCount, 
+              config.mode,
+              config.examStyle,
+              (status) => setLoadingStatus(status)
+            );
+            generatedQuestions = result.questions;
+          }
+          
+          if (!generatedQuestions || generatedQuestions.length === 0) {
+            throw new Error("AI tidak menghasilkan soal. Coba topik lain.");
+          }
+
+          setQuestions(generatedQuestions);
+          setOriginalQuestions(generatedQuestions);
+
+          notifyQuizReady(generatedQuestions.length);
+
+          setLoadingStatus("Menyimpan Quiz...");
+          try {
+            await saveGeneratedQuiz(file, config, generatedQuestions);
+            const latest = await getSavedQuizzes();
+            if (latest.length > 0) setActiveQuizId(latest[0].id);
+          } catch (saveError) {
+            console.error("Non-fatal error saving quiz:", saveError);
+          }
+          
+          setQuizState(QuizState.QUIZ_ACTIVE);
+
+        } catch (error: any) {
+          console.error(error);
+          setErrorMsg(error.message || "Terjadi kesalahan. Periksa API Key atau koneksi.");
+          setQuizState(QuizState.ERROR);
+        }
+    }, 100);
+  };
+
+  // --- NEW FEATURE: ADD MORE QUESTIONS (FIXED) ---
+  const handleAddMoreQuestions = async (count: number) => {
+    if (!lastConfig) return;
+
+    // 1. Force UI update first to avoid white screen lag
+    setLoadingStatus(`Meracik ${count} soal tambahan...`);
+    setQuizState(QuizState.PROCESSING);
+
+    // Use setTimeout to allow React to render the LoadingScreen before heavy lifting
+    setTimeout(async () => {
+        try {
+            const existingTexts = originalQuestions.map(q => q.text);
+            const apiKey = getApiKey(lastConfig.config.provider);
+            if (!apiKey) throw new Error("API Key missing");
       
-      setQuestions(generatedQuestions);
-      setOriginalQuestions(generatedQuestions);
-
-      // Trigger Notification ( •_•)
-      notifyQuizReady(generatedQuestions.length);
-
-      // Save History and get the approximate ID (Timestamp based)
-      setLoadingStatus("Menyimpan Quiz...");
-      try {
-        await saveGeneratedQuiz(file, config, generatedQuestions);
-        // Little hack: Since we just saved it, the ID is Date.now(). 
-        // We'll just grab the latest from localstorage for tracking stats.
-        const latest = await getSavedQuizzes();
-        if (latest.length > 0) setActiveQuizId(latest[0].id);
-      } catch (saveError) {
-        console.error("Non-fatal error saving quiz:", saveError);
-      }
+            let newQuestions: Question[] = [];
+            const { file, config } = lastConfig;
       
-      setQuizState(QuizState.QUIZ_ACTIVE);
-
-    } catch (error: any) {
-      console.error(error);
-      setErrorMsg(error.message || "Terjadi kesalahan. Periksa API Key atau koneksi.");
-      setQuizState(QuizState.ERROR);
-    }
+            if (config.provider === 'gemini') {
+              const res = await generateQuiz(
+                apiKey, file, config.topic, config.modelId, count, config.mode, config.examStyle,
+                (status) => setLoadingStatus(status),
+                existingTexts
+              );
+              newQuestions = res.questions;
+            } else {
+              const res = await generateQuizGroq(
+                apiKey, file, config.topic, config.modelId, count, config.mode, config.examStyle,
+                (status) => setLoadingStatus(status),
+                existingTexts
+              );
+              newQuestions = res.questions;
+            }
+            
+            // Fix IDs for new questions
+            const maxId = Math.max(...originalQuestions.map(q => q.id), 0);
+            const indexedNewQuestions = newQuestions.map((q, i) => ({ ...q, id: maxId + i + 1 }));
+            
+            const mergedQuestions = [...originalQuestions, ...indexedNewQuestions];
+            
+            setQuestions(mergedQuestions);
+            setOriginalQuestions(mergedQuestions);
+            
+            if (activeQuizId) {
+               await updateLocalQuizQuestions(activeQuizId, mergedQuestions);
+            }
+            
+            setResult(null); 
+            setQuizState(QuizState.QUIZ_ACTIVE); 
+      
+          } catch (e: any) {
+            alert("Gagal menambah soal: " + e.message);
+            // Revert safely
+            setQuestions(originalQuestions); 
+            setQuizState(QuizState.RESULTS); 
+          }
+    }, 100);
   };
 
   const handleImportQuiz = (file: File) => {
@@ -144,20 +199,17 @@ const App: React.FC = () => {
     reader.onload = (e) => {
       try {
         const json = JSON.parse(e.target?.result as string);
-        if (!json.questions || !Array.isArray(json.questions)) {
-          throw new Error("Format file tidak valid.");
-        }
+        if (!json.questions || !Array.isArray(json.questions)) throw new Error("Format invalid.");
         setQuestions(json.questions);
         setOriginalQuestions(json.questions);
         setActiveMode(QuizMode.STANDARD);
-        setActiveQuizId(null); // Imported external files don't map to history ID easily yet
+        setActiveQuizId(null);
         setErrorMsg(null);
         setResult(null);
         setQuizState(QuizState.QUIZ_ACTIVE);
+        setLastConfig(null); 
         alert(`Berhasil mengimpor ${json.questions.length} soal!`);
-      } catch (err) {
-        alert("Gagal membaca file quiz.");
-      }
+      } catch (err) { alert("Gagal membaca file quiz."); }
     };
     reader.readAsText(file);
   };
@@ -170,7 +222,17 @@ const App: React.FC = () => {
     setErrorMsg(null);
     setResult(null);
     setQuizState(QuizState.QUIZ_ACTIVE);
-    
+    setLastConfig({
+       file: null,
+       config: {
+         provider: savedQuiz.provider || 'gemini',
+         modelId: savedQuiz.modelId,
+         questionCount: 10,
+         mode: savedQuiz.mode,
+         examStyle: 'CONCEPTUAL' as any,
+         topic: savedQuiz.topicSummary
+       }
+    });
     setCurrentView(AppView.GENERATOR);
   };
 
@@ -181,14 +243,13 @@ const App: React.FC = () => {
      setActiveQuizId(null); 
      setErrorMsg(null);
      setResult(null);
+     setLastConfig(null);
      setQuizState(QuizState.QUIZ_ACTIVE);
   };
 
   const handleQuizComplete = (finalResult: QuizResult) => {
     setResult(finalResult);
     setQuizState(QuizState.RESULTS);
-    
-    // UPDATE HISTORY STATS (Score)
     if (activeQuizId) {
        const percentage = Math.round((finalResult.correctCount / finalResult.totalQuestions) * 100);
        updateHistoryStats(activeQuizId, percentage);
@@ -201,23 +262,14 @@ const App: React.FC = () => {
   };
 
   const handleDeleteActiveQuiz = async () => {
-    if (activeQuizId) {
-       await deleteQuiz(activeQuizId);
-    }
+    if (activeQuizId) { await deleteQuiz(activeQuizId); }
     resetApp();
-  };
-
-  const handleContinueQuiz = () => {
-    if (questions.length > 0) {
-        setQuizState(QuizState.QUIZ_ACTIVE);
-    }
   };
 
   const handleRetryMistakes = () => {
     if (!result) return;
     const wrongQuestionIds = result.answers.filter(a => !a.isCorrect).map(a => a.questionId);
     const mistakesToRetry = originalQuestions.filter(q => wrongQuestionIds.includes(q.id));
-
     if (mistakesToRetry.length > 0) {
       setQuestions(mistakesToRetry);
       setResult(null);
@@ -231,32 +283,39 @@ const App: React.FC = () => {
     setQuizState(QuizState.QUIZ_ACTIVE);
   };
 
+  const handleContinueQuiz = () => {
+    if (questions.length > 0) setQuizState(QuizState.QUIZ_ACTIVE);
+  };
+
   const resetApp = () => {
     setQuestions([]);
     setOriginalQuestions([]);
     setResult(null);
     setErrorMsg(null);
     setActiveQuizId(null);
+    setLastConfig(null);
     setQuizState(QuizState.CONFIG);
   };
 
-  // IF LOCKED, SHOW LOGIN GATE
-  if (isLocked) {
-    return <LoginGate onUnlock={handleUnlock} />;
-  }
+  if (isLocked) return <LoginGate onUnlock={handleUnlock} />;
 
-  // Main Render Logic
   const renderContent = () => {
     if (quizState === QuizState.PROCESSING) return <LoadingScreen status={loadingStatus} />;
     
+    // SAFEGUARD: Ensure questions exist before rendering interface
     if (quizState === QuizState.QUIZ_ACTIVE) {
+        if (!questions || questions.length === 0) {
+            setQuizState(QuizState.ERROR);
+            setErrorMsg("Data soal kosong atau corrupt.");
+            return null;
+        }
         return (
           <QuizInterface 
             questions={questions} 
             mode={activeMode} 
             onComplete={handleQuizComplete} 
             onExit={handleExitQuiz}
-            onDelete={activeQuizId ? handleDeleteActiveQuiz : undefined} // Pass delete handler
+            onDelete={activeQuizId ? handleDeleteActiveQuiz : undefined}
           />
         );
     }
@@ -269,7 +328,8 @@ const App: React.FC = () => {
               onReset={resetApp} 
               onRetryMistakes={handleRetryMistakes}
               onRetryAll={handleRetryAll}
-              onDelete={activeQuizId ? handleDeleteActiveQuiz : undefined} // Pass delete handler
+              onDelete={activeQuizId ? handleDeleteActiveQuiz : undefined}
+              onAddMore={lastConfig ? handleAddMoreQuestions : undefined}
             />
         );
     }
@@ -294,7 +354,6 @@ const App: React.FC = () => {
         return (
             <ConfigScreen 
                 onStart={startQuizGeneration} 
-                onImport={handleImportQuiz} 
                 onContinue={handleContinueQuiz}
                 hasActiveSession={questions.length > 0 && quizState === QuizState.CONFIG && !result}
             />
@@ -303,16 +362,14 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen p-4 md:p-8 relative pb-24">
-      {/* Analysis Info Button */}
+    <div className="min-h-screen p-4 md:p-8 relative pb-24 transition-colors duration-500">
       <button 
         onClick={() => setShowAnalysis(!showAnalysis)}
-        className="fixed top-6 right-6 z-40 p-2 rounded-full bg-white/20 backdrop-blur-md border border-white/40 text-slate-600 hover:bg-white/40 shadow-sm"
+        className="fixed top-6 right-6 z-40 p-2 rounded-full bg-theme-glass border border-theme-border text-theme-muted hover:bg-theme-bg shadow-sm"
       >
         <Info size={24} />
       </button>
 
-      {/* Info Modal */}
       <AnimatePresence>
         {showAnalysis && (
           <motion.div 
@@ -320,15 +377,15 @@ const App: React.FC = () => {
             className="fixed inset-0 z-50 bg-slate-900/20 backdrop-blur-sm flex items-center justify-center p-4"
             onClick={() => setShowAnalysis(false)}
           >
-            <div className="bg-white/90 backdrop-blur-xl max-w-lg w-full rounded-3xl p-8 shadow-2xl" onClick={e => e.stopPropagation()}>
-              <h2 className="text-xl font-bold mb-4">Mikir ( •_•)</h2>
-              <p className="text-sm text-slate-600 mb-4">
+            <div className="bg-theme-bg/90 backdrop-blur-xl max-w-lg w-full rounded-3xl p-8 shadow-2xl border border-theme-border" onClick={e => e.stopPropagation()}>
+              <h2 className="text-xl font-bold mb-4 text-theme-text">Mikir ( •_•)</h2>
+              <p className="text-sm text-theme-text mb-4">
                 Aplikasi ini berjalan 100% di browser kamu. Tidak ada backend server yang menyimpan data pribadimu kecuali kamu menghubungkan Supabase.
               </p>
-              <div className="p-4 bg-indigo-50 rounded-xl mb-4 border border-indigo-100">
-                <p className="text-xs text-indigo-800 font-medium">Crafted with 🌽 by Bakwan Jagung</p>
+              <div className="p-4 bg-theme-primary/10 rounded-xl mb-4 border border-theme-primary/20">
+                <p className="text-xs text-theme-primary font-medium">Crafted with 🌽 by Bakwan Jagung</p>
               </div>
-              <button onClick={() => setShowAnalysis(false)} className="w-full py-2 bg-indigo-600 text-white rounded-xl">Tutup</button>
+              <button onClick={() => setShowAnalysis(false)} className="w-full py-2 bg-theme-primary text-white rounded-xl">Tutup</button>
             </div>
           </motion.div>
         )}
@@ -348,14 +405,12 @@ const App: React.FC = () => {
         </AnimatePresence>
       </div>
 
-      {/* Navigation */}
       {quizState !== QuizState.PROCESSING && quizState !== QuizState.QUIZ_ACTIVE && (
         <Navigation currentView={currentView} onChangeView={setCurrentView} />
       )}
 
-      {/* WATERMARK FIXED BOTTOM */}
       <div className="fixed bottom-1 left-0 w-full text-center z-40 pointer-events-none">
-        <p className="text-[10px] text-slate-400/50 font-medium tracking-widest uppercase">
+        <p className="text-[10px] text-theme-muted opacity-50 font-medium tracking-widest uppercase">
           crafted by Bakwan Jagung 🌽
         </p>
       </div>

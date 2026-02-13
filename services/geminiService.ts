@@ -8,7 +8,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { Question, QuizMode, ExamStyle } from "../types";
 
-const BATCH_SIZE = 30; 
+const BATCH_SIZE = 20; // Gemini handles larger context better than Groq
 
 // Helper to convert file to base64
 const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: string; mimeType: string } } | { text: string }> => {
@@ -38,17 +38,12 @@ const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: s
 
 // ROBUST JSON CLEANER
 const cleanJSON = (text: string) => {
-  // 1. Remove Markdown Code Blocks
   let cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
-  
-  // 2. Find the first '[' and the last ']' to ignore preamble text
   const firstBracket = cleaned.indexOf('[');
   const lastBracket = cleaned.lastIndexOf(']');
-  
   if (firstBracket !== -1 && lastBracket !== -1) {
     cleaned = cleaned.substring(firstBracket, lastBracket + 1);
   }
-  
   return cleaned;
 };
 
@@ -83,10 +78,23 @@ const sanitizeQuestion = (q: any): Omit<Question, 'id'> => {
   if (correctIndex >= 4) correctIndex = 0;
   if (correctIndex < 0) correctIndex = 0;
 
+  // --- SHUFFLE LOGIC (NEW) ---
+  // AI tends to put correct answer at index 0. We randomize strictly here.
+  const correctContent = options[correctIndex];
+  
+  // Fisher-Yates Shuffle
+  for (let i = options.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [options[i], options[j]] = [options[j], options[i]];
+  }
+
+  // Find where the correct answer moved to
+  const newCorrectIndex = options.indexOf(correctContent);
+
   return {
     text: String(q.text || "Pertanyaan kosong (Error AI)"),
     options: options,
-    correctIndex: correctIndex,
+    correctIndex: newCorrectIndex !== -1 ? newCorrectIndex : 0, // Fallback safe
     explanation: String(q.explanation || "Tidak ada penjelasan."),
     keyPoint: String(q.keyPoint || "Topik Umum"),
     difficulty: (["Easy", "Medium", "Hard"].includes(q.difficulty) ? q.difficulty : "Medium") as any
@@ -101,7 +109,8 @@ export const generateQuiz = async (
   questionCount: number,
   mode: QuizMode,
   examStyle: ExamStyle = ExamStyle.CONCEPTUAL,
-  onProgress: (status: string) => void 
+  onProgress: (status: string) => void,
+  existingQuestionsContext: string[] = [] // NEW: List of existing question texts to avoid
 ): Promise<{ questions: Question[], contextText: string }> => {
   
   if (!apiKey) throw new Error("API Key belum diatur. Silakan ke menu Settings.");
@@ -129,6 +138,37 @@ export const generateQuiz = async (
 
   let completedBatches = 0;
 
+  // PROMPT CONSTRUCTION
+  let stylePrompt = "";
+  switch (examStyle) {
+    case ExamStyle.CONCEPTUAL: 
+      stylePrompt = `
+        STYLE: ESSENTIALIST & DEEP.
+        - Questions must be concise (under 20 words).
+        - Focus on "First Principles" (Why/How).
+        - Test misconceptions.
+      `; 
+      break;
+    case ExamStyle.ANALYTICAL: 
+      stylePrompt = `STYLE: LOGIC PUZZLE. Connect two distinct concepts from the text. Questions requiring inference.`; 
+      break;
+    case ExamStyle.CASE_STUDY: 
+      stylePrompt = `STYLE: SCENARIO. Short practical situation (2 sentences max). Application of theory.`; 
+      break;
+    case ExamStyle.COMPETITIVE: 
+      stylePrompt = `STYLE: TRICKY & PRECISE. Use distractors that are partially true but technically wrong.`; 
+      break;
+    default: 
+      stylePrompt = `STYLE: ACADEMIC.`; 
+      break;
+  }
+
+  let duplicateGuard = "";
+  if (existingQuestionsContext.length > 0) {
+    const snippet = existingQuestionsContext.slice(-25).join(" | ");
+    duplicateGuard = `IGNORE previously generated concepts: [${snippet}]. Explore NEW angles.`;
+  }
+
   const batchPromises = Array.from({ length: totalBatches }).map(async (_, i) => {
     const currentBatchNum = i + 1;
     const isLastBatch = i === totalBatches - 1;
@@ -136,42 +176,40 @@ export const generateQuiz = async (
       ? questionCount - (i * BATCH_SIZE) 
       : BATCH_SIZE;
 
-    let specificInstruction = "";
-    if (mode === QuizMode.SCAFFOLDING) specificInstruction += `MODE: SCAFFOLDING (Guided Learning). Mix difficulties.`;
-    else if (mode === QuizMode.SURVIVAL) specificInstruction += `MODE: SURVIVAL. High difficulty.`;
-    else if (mode === QuizMode.TIME_RUSH) specificInstruction += `MODE: TIME RUSH. Concise questions.`;
+    // Skip empty batch if math is off
+    if (questionsForThisBatch <= 0) return [];
 
-    let stylePrompt = "";
-    switch (examStyle) {
-      case ExamStyle.CONCEPTUAL: stylePrompt = `FOCUS: BASIC CONCEPTS (Bloom's C1/C2). Definitions, facts.`; break;
-      case ExamStyle.ANALYTICAL: stylePrompt = `FOCUS: ANALYTICAL (Bloom's C4/C5). Logic, inference.`; break;
-      case ExamStyle.CASE_STUDY: stylePrompt = `FOCUS: APPLICATION (Bloom's C3). Case studies.`; break;
-      case ExamStyle.COMPETITIVE: stylePrompt = `FOCUS: COMPETITIVE. Tricky details, distractors.`; break;
-      default: stylePrompt = `FOCUS: Balanced.`; break;
-    }
-
-    const contextPrompt = totalBatches > 1 ? `Part ${currentBatchNum} of ${totalBatches}.` : "";
-
-    // CONSTRUCT PROMPT BASED ON FILE OR TOPIC
     let mainPrompt = "";
     const parts: any[] = [];
 
     if (filePart) {
       parts.push(filePart);
-      mainPrompt = `Analyze the document provided. Create exactly ${questionsForThisBatch} questions.`;
+      mainPrompt = `Analyze the document provided.`;
     } else if (topic) {
-      mainPrompt = `Create exactly ${questionsForThisBatch} questions about the topic: "${topic}".`;
+      mainPrompt = `Topic: "${topic}".`;
     } else {
       throw new Error("File or Topic required.");
     }
 
     const finalPrompt = `
       ${mainPrompt}
-      Language: INDONESIAN.
-      ${contextPrompt}
-      INSTRUCTIONS: ${specificInstruction} ${stylePrompt}
-      OUTPUT FORMAT: STRICT JSON Array. Do not wrap in markdown blocks.
-      Example: [{"text": "...", "options": ["A","B","C","D"], "correctIndex": 0, "explanation": "...", "keyPoint": "Topic", "difficulty": "Easy"}]
+      Task: Create exactly ${questionsForThisBatch} questions (Batch ${currentBatchNum}).
+      Language: INDONESIAN (Formal, Academic).
+      ${stylePrompt}
+      ${duplicateGuard}
+
+      CRITICAL RULES FOR EXPLANATION (MANDATORY):
+      1. **NO FLUFF**: Max 3 sentences (approx 30 words). Save tokens.
+      2. **DIRECT**: Explain the *mechanism* or *scientific reason*.
+      3. **FORBIDDEN PHRASES**: NEVER say "Teks menyatakan", "Menurut dokumen", "Secara eksplisit", "Jawaban yang benar adalah". 
+      4. **INTELLIGENT**: Go straight to the logic. Example: Instead of "The text says kidneys detect O2", say "Kidneys receive high stable blood flow, making them ideal sensors for partial oxygen pressure changes."
+
+      OUTPUT RULES:
+      1. STRICT JSON Array format. 
+      2. No markdown blocks.
+      3. Options must be distinct.
+      
+      Structure: [{"text": "Short Question?", "options": ["A","B","C","D"], "correctIndex": 0, "explanation": "Direct scientific reasoning without filler.", "keyPoint": "1-2 Words Concept", "difficulty": "Medium"}]
     `;
 
     parts.push({ text: finalPrompt });
@@ -180,9 +218,9 @@ export const generateQuiz = async (
       const response = await ai.models.generateContent({
         model: modelId,
         contents: { parts },
-        // KEY FIX: FORCE JSON RESPONSE TYPE
         config: { 
-          responseMimeType: "application/json" 
+          responseMimeType: "application/json",
+          temperature: 0.3 // Lower temperature for concise/strict output
         }
       });
 
@@ -198,7 +236,6 @@ export const generateQuiz = async (
         rawData = JSON.parse(cleaned);
       } catch (parseError) {
         console.error("JSON Parse Error on Batch " + currentBatchNum, text);
-        // Fallback: try to see if it's wrapped in an object key
         try {
            const obj = JSON.parse(text);
            if (obj.questions && Array.isArray(obj.questions)) rawData = obj.questions;
@@ -220,48 +257,26 @@ export const generateQuiz = async (
 
   if (allQuestions.length === 0) throw new Error("Gagal membuat soal. Respon AI kosong atau tidak valid.");
 
-  onProgress("Finalisasi...");
-
-  let finalQuestions: Question[] = allQuestions.map((q, index) => ({
+  const finalQuestions = allQuestions.map((q, index) => ({
     ...q,
     id: index + 1
   }));
 
-  if (mode === QuizMode.SCAFFOLDING) {
-    const difficultyOrder = { 'Easy': 1, 'Medium': 2, 'Hard': 3 };
-    finalQuestions = finalQuestions.sort((a, b) => difficultyOrder[a.difficulty] - difficultyOrder[b.difficulty]);
-  }
-
   return { questions: finalQuestions, contextText };
 };
 
-// --- EXPLAIN DEEPER ---
 export const explainQuestionDeeper = async (
   apiKey: string,
   question: Question
 ): Promise<string> => {
   const ai = new GoogleGenAI({ apiKey });
-  
-  const prompt = `
-    Soal: "${question.text}"
-    Pilihan: ${question.options.join(', ')}
-    Jawaban Benar: ${question.options[question.correctIndex]}
-
-    Tugas: Jelaskan kenapa jawaban tersebut benar dengan bahasa yang sangat sederhana (seperti menjelaskan ke anak 10 tahun). Berikan analogi atau contoh nyata jika memungkinkan. Maksimal 3 kalimat pendek. Bahasa Indonesia.
-  `;
-
+  const prompt = `Soal: "${question.text}"... Jawaban: ${question.options[question.correctIndex]}. Jelaskan mekanismenya secara padat, ilmiah, dan langsung (max 50 kata). Jangan pakai kata pengantar.`;
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash', 
-      contents: prompt
-    });
-    return response.text || "Gagal mendapatkan penjelasan tambahan.";
-  } catch (e) {
-    return "Maaf, AI sedang sibuk. Coba lagi nanti.";
-  }
+    const response = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt });
+    return response.text || "Gagal.";
+  } catch (e) { return "Error."; }
 };
 
-// --- CHAT WITH DOCUMENT ---
 export const chatWithDocument = async (
   apiKey: string,
   modelId: string,
@@ -271,42 +286,24 @@ export const chatWithDocument = async (
   file: File | null
 ): Promise<string> => {
   const ai = new GoogleGenAI({ apiKey });
-  
-  let systemInstruction = "You are a helpful AI tutor. Answer based on the context provided.";
-  
+  let systemInstruction = "You are a concise, helpful AI tutor. Answer directly without fluff.";
   const parts: any[] = [{ text: message }];
-
-  // If context is text-based, add to system instruction
   if (contextText && !contextText.startsWith("[Binary File:")) {
      systemInstruction += `\n\nContext:\n${contextText.substring(0, 30000)}`; 
   }
-  
-  // If context is binary (PDF/Image), attach to the message
   if (file && contextText.startsWith("[Binary File:")) {
     try {
       const filePart = await fileToGenerativePart(file);
-       // fileToGenerativePart returns { inlineData: ... } or { text: ... }
-       if ('inlineData' in filePart) {
-         parts.unshift(filePart);
-       }
-    } catch (e) {
-      console.error("File processing error", e);
-    }
+       if ('inlineData' in filePart) parts.unshift(filePart);
+    } catch (e) { console.error(e); }
   }
-
   try {
     const chat = ai.chats.create({
       model: modelId,
-      config: {
-        systemInstruction
-      },
+      config: { systemInstruction },
       history: history.map(h => ({ role: h.role, parts: h.parts }))
     });
-
     const result = await chat.sendMessage({ parts });
-    return result.text || "Tidak ada jawaban.";
-  } catch (e) {
-    console.error(e);
-    return "Maaf, terjadi kesalahan saat menghubungi AI.";
-  }
+    return result.text || "No response.";
+  } catch (e) { return "Error."; }
 };

@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Upload, FileText, Layout, Zap, TrendingUp, Skull, BookOpen, BrainCircuit, Briefcase, Target, Type, Cpu, Download, PlayCircle, Cloud, RefreshCw, Layers, X, Edit3 } from 'lucide-react';
+import { Upload, FileText, Layout, Zap, TrendingUp, Skull, BookOpen, BrainCircuit, Briefcase, Target, Type, Cpu, Cloud, RefreshCw, Layers, X, Edit3, PlayCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AVAILABLE_MODELS, ModelConfig, QuizMode, ExamStyle, AiProvider, CloudNote, Question } from '../types';
 import { GlassButton } from './GlassButton';
@@ -13,12 +13,11 @@ import { FlashcardScreen } from './FlashcardScreen';
 
 interface ConfigScreenProps {
   onStart: (file: File | null, config: ModelConfig) => void;
-  onImport: (file: File) => void;
   onContinue: () => void;
   hasActiveSession: boolean;
 }
 
-export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onImport, onContinue, hasActiveSession }) => {
+export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue, hasActiveSession }) => {
   const [inputMethod, setInputMethod] = useState<'file' | 'topic' | 'cloud'>('file');
   const [file, setFile] = useState<File | null>(null);
   
@@ -70,14 +69,10 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onImport, o
     setDragActive(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const droppedFile = e.dataTransfer.files[0];
-      if (droppedFile.name.endsWith('.json') || droppedFile.name.endsWith('.glassquiz')) {
-        onImport(droppedFile);
-      } else {
-        setFile(droppedFile);
-        setInputMethod('file');
-        // Auto-fill topic with filename for convenience, but user can edit
-        setTopic(droppedFile.name.replace(/\.[^/.]+$/, "")); 
-      }
+      setFile(droppedFile);
+      setInputMethod('file');
+      // Auto-fill topic with filename for convenience, but user can edit
+      setTopic(droppedFile.name.replace(/\.[^/.]+$/, "")); 
     }
   };
 
@@ -87,10 +82,6 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onImport, o
        setFile(f);
        setTopic(f.name.replace(/\.[^/.]+$/, ""));
     }
-  };
-
-  const handleImportFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) onImport(e.target.files[0]);
   };
 
   const handleFetchNotes = async () => {
@@ -125,11 +116,7 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onImport, o
        // Combine User's Title + Note Content
        finalTopicPrompt = `Fokus Topik: ${topic}\n\nReferensi Materi:\n${selectedNote.content}`;
     } 
-    else if (inputMethod === 'file') {
-       // For file, usually just the file content is enough, but we can pass topic as hint if needed.
-       // The geminiService handles file + topic combination if topic is passed.
-    }
-
+    
     onStart(
       inputMethod === 'file' ? file : null, 
       { 
@@ -211,13 +198,6 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onImport, o
         transition={{ delay: 0.1 }}
         className="bg-theme-glass border border-theme-border rounded-[2.5rem] p-6 md:p-10 shadow-xl relative"
       >
-        <div className="absolute top-6 right-6 md:top-10 md:right-10">
-          <button onClick={() => document.getElementById('import-quiz-input')?.click()} className="flex items-center space-x-2 text-xs font-medium text-theme-muted hover:text-theme-primary bg-theme-bg/50 px-3 py-2 rounded-xl border border-theme-border transition-all">
-            <Download size={14} /> <span>Import</span>
-          </button>
-          <input type="file" id="import-quiz-input" accept=".json,.glassquiz" className="hidden" onChange={handleImportFileChange} />
-        </div>
-
         {/* INPUT TABS - SOLID BACKGROUND */}
         <div className="flex p-1 bg-theme-bg rounded-2xl mb-8 w-fit mx-auto border border-theme-border flex-wrap justify-center shadow-sm">
           <button onClick={() => { setInputMethod('file'); setTopic(''); }} className={`flex items-center space-x-2 px-4 md:px-6 py-2 rounded-xl transition-all ${inputMethod === 'file' ? 'bg-theme-primary text-white shadow-md font-bold' : 'text-theme-muted hover:text-theme-text hover:bg-theme-glass'}`}>

@@ -1,9 +1,9 @@
 
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Key, Save, Trash2, ShieldCheck, Zap, Cpu, Database, HardDrive, Server, Layers, HelpCircle, CheckCircle2, Copy, Palette, LogOut, CreditCard, ShieldAlert, Wrench } from 'lucide-react';
-import { saveApiKey, getApiKey, removeApiKey, saveStorageConfig, getStorageProvider, getSupabaseConfig } from '../services/storageService';
-import { MikirCloud, SUPABASE_SCHEMA_SQL } from '../services/supabaseService'; // NEW IMPORT
+import { Key, Save, Trash2, ShieldCheck, Zap, Cpu, Database, HardDrive, Server, Layers, HelpCircle, CheckCircle2, Copy, Palette, LogOut, CreditCard, ShieldAlert, Wrench, Hand } from 'lucide-react';
+import { saveApiKey, getApiKey, removeApiKey, saveStorageConfig, getStorageProvider, getSupabaseConfig, saveGestureEnabled, getGestureEnabled } from '../services/storageService';
+import { MikirCloud, SUPABASE_SCHEMA_SQL } from '../services/supabaseService'; 
 import { setSRSEnabled, isSRSEnabled } from '../services/srsService';
 import { requestKaomojiPermission, notifySupabaseSuccess, notifySupabaseError } from '../services/kaomojiNotificationService';
 import { getSavedTheme } from '../services/themeService';
@@ -30,6 +30,7 @@ export const SettingsScreen: React.FC = () => {
   const [showGuide, setShowGuide] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
   const [srsEnabled, setSrsEnabledState] = useState(true);
+  const [gestureEnabled, setGestureEnabled] = useState(false);
   const [currentTheme, setCurrentTheme] = useState(getSavedTheme());
   
   const [sessionMetadata, setSessionMetadata] = useState<any>(null);
@@ -49,6 +50,7 @@ export const SettingsScreen: React.FC = () => {
     const sbConfig = getSupabaseConfig();
     if (sbConfig) { setSupabaseUrl(sbConfig.url); setSupabaseKey(sbConfig.key); }
     setSrsEnabledState(isSRSEnabled());
+    setGestureEnabled(getGestureEnabled());
     setSessionMetadata(getKeycardSession());
   }, []);
 
@@ -80,7 +82,6 @@ export const SettingsScreen: React.FC = () => {
     setConnectionStatus('idle');
     
     try {
-      // Use the new MikirCloud client structure
       const result = await MikirCloud.system.checkConnection({ url: supabaseUrl, key: supabaseKey });
       
       if (result.connected) {
@@ -116,6 +117,7 @@ export const SettingsScreen: React.FC = () => {
 
   const handleCopySql = () => { navigator.clipboard.writeText(SUPABASE_SCHEMA_SQL); setCopiedSql(true); setTimeout(() => setCopiedSql(false), 2000); };
   const toggleSRS = () => { const newState = !srsEnabled; setSrsEnabledState(newState); setSRSEnabled(newState); };
+  const toggleGesture = () => { const newState = !gestureEnabled; setGestureEnabled(newState); saveGestureEnabled(newState); };
 
   const verifyAdmin = () => {
     const secret = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || DEFAULT_ADMIN_PASS;
@@ -254,10 +256,19 @@ export const SettingsScreen: React.FC = () => {
         {storageTab === 'features' && (
            <>
              <div className="flex items-center space-x-3 mb-6"><div className="p-3 bg-theme-primary/10 rounded-xl text-theme-primary"><Layers size={24} /></div><div><h2 className="text-2xl font-bold">Fitur</h2></div></div>
-             <div className="bg-theme-glass border border-theme-border rounded-2xl p-4 flex items-center justify-between">
+             
+             <div className="bg-theme-glass border border-theme-border rounded-2xl p-4 flex items-center justify-between mb-4">
                <div><h3 className="font-bold">Spaced Repetition (SRS)</h3><p className="text-xs opacity-60">Review berkala otomatis.</p></div>
                <button onClick={toggleSRS} className={`w-14 h-8 rounded-full p-1 transition-colors ${srsEnabled ? 'bg-theme-primary' : 'bg-slate-300'}`}><motion.div className="w-6 h-6 bg-white rounded-full shadow-sm" animate={{ x: srsEnabled ? 24 : 0 }} /></button>
-            </div>
+             </div>
+
+             <div className="bg-theme-glass border border-theme-border rounded-2xl p-4 flex items-center justify-between">
+               <div>
+                 <h3 className="font-bold flex items-center"><Hand size={14} className="mr-1 text-purple-500" /> Gesture Control</h3>
+                 <p className="text-xs opacity-60">Jawab kuis dengan jari (Kamera). <span className="text-rose-500 font-bold text-[10px] uppercase">Experimental</span></p>
+               </div>
+               <button onClick={toggleGesture} className={`w-14 h-8 rounded-full p-1 transition-colors ${gestureEnabled ? 'bg-purple-500' : 'bg-slate-300'}`}><motion.div className="w-6 h-6 bg-white rounded-full shadow-sm" animate={{ x: gestureEnabled ? 24 : 0 }} /></button>
+             </div>
            </>
         )}
       </motion.div>

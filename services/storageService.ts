@@ -14,6 +14,17 @@ const GEMINI_KEY_STORAGE = 'glassquiz_api_key';
 const GROQ_KEY_STORAGE = 'glassquiz_groq_key';
 const STORAGE_PREF_KEY = 'glassquiz_storage_pref';
 const SUPABASE_CONFIG_KEY = 'glassquiz_supabase_config';
+const GESTURE_ENABLED_KEY = 'glassquiz_gesture_enabled'; // NEW
+
+// --- SETTINGS (GESTURE) ---
+export const saveGestureEnabled = (enabled: boolean) => {
+    localStorage.setItem(GESTURE_ENABLED_KEY, JSON.stringify(enabled));
+};
+
+export const getGestureEnabled = (): boolean => {
+    const raw = localStorage.getItem(GESTURE_ENABLED_KEY);
+    return raw ? JSON.parse(raw) : false; // Default OFF because experimental
+};
 
 // --- API KEY MANAGEMENT ---
 export const saveApiKey = (provider: AiProvider, key: string) => {
@@ -187,14 +198,12 @@ export const fetchNotesFromSupabase = async (): Promise<CloudNote[]> => {
 export const downloadFromCloud = async (cloudQuiz: any) => {
   try {
     // 1. Data Cleaning
-    // Ensure questions is an Array, not stringified JSON
     let safeQuestions = cloudQuiz.questions;
     if (typeof safeQuestions === 'string') {
         try { safeQuestions = JSON.parse(safeQuestions); } catch (e) { safeQuestions = []; }
     }
     
     // 2. Create Clean Local Object
-    // Generate NEW ID to prevent collision with existing data
     const localQuiz = { 
         ...cloudQuiz, 
         id: Date.now(), 
@@ -205,9 +214,6 @@ export const downloadFromCloud = async (cloudQuiz: any) => {
     // 3. Save to Local Storage directly
     const rawHistory = localStorage.getItem(HISTORY_KEY);
     const history = rawHistory ? JSON.parse(rawHistory) : [];
-    
-    // Prevent duplicate download logic (optional, based on filename + count)
-    // For now we allow duplicates but with new IDs
     
     history.unshift(localQuiz);
     localStorage.setItem(HISTORY_KEY, JSON.stringify(history));

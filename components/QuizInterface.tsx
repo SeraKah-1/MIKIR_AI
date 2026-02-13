@@ -1,12 +1,12 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Check, ArrowRight, ArrowLeft, Clock, Heart, Flame, Sparkles, Lightbulb, Volume2, Mic, LogOut, Terminal, AlertTriangle, Trash2, MicOff } from 'lucide-react';
+import { Check, ArrowRight, ArrowLeft, Clock, Heart, Flame, Sparkles, Lightbulb, Volume2, LogOut, Trash2, Hand } from 'lucide-react';
 import { Question, QuizResult, QuizMode } from '../types';
 import { GlassButton } from './GlassButton';
 import { useGameSound } from '../hooks/useGameSound';
-import { useVoiceControl } from '../hooks/useVoiceControl'; // NEW IMPORT
-import { VoiceFeedback } from './VoiceFeedback'; // NEW IMPORT
+import { GestureControl } from './GestureControl'; // NEW COMPONENT
+import { getGestureEnabled } from '../services/storageService'; // NEW SETTING
 import confetti from 'canvas-confetti';
 
 // --- Utility: Enhanced Formatted Text Renderer (NON-RECURSIVE / SAFE MODE) ---
@@ -26,7 +26,7 @@ const FormattedText: React.FC<{ text: string; className?: string }> = ({ text, c
           return (
             <div key={i} className="bg-slate-900 text-emerald-400 font-mono text-sm p-4 rounded-xl overflow-x-auto shadow-inner border border-slate-700 my-2 text-left">
               <div className="flex items-center text-slate-500 mb-2 text-xs border-b border-slate-700 pb-1">
-                 <Terminal size={12} className="mr-1" /> Code Snippet
+                 <div className="mr-1">⚡</div> Code Snippet
               </div>
               <pre className="whitespace-pre-wrap break-words leading-relaxed">{content}</pre>
             </div>
@@ -40,10 +40,10 @@ const FormattedText: React.FC<{ text: string; className?: string }> = ({ text, c
           <span key={i}>
             {inlineParts.map((frag, j) => {
                if (frag.startsWith('**') && frag.endsWith('**') && frag.length > 4) {
-                  return <strong key={j} className="font-bold text-indigo-900">{frag.slice(2, -2)}</strong>;
+                  return <strong key={j} className="font-bold text-theme-primary/80">{frag.slice(2, -2)}</strong>;
                }
                if (frag.startsWith('`') && frag.endsWith('`') && frag.length > 2) {
-                  return <code key={j} className="font-mono text-sm bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded border border-indigo-100">{frag.slice(1, -1)}</code>;
+                  return <code key={j} className="font-mono text-sm bg-theme-glass text-theme-primary px-1.5 py-0.5 rounded border border-theme-border">{frag.slice(1, -1)}</code>;
                }
                return <span key={j}>{frag}</span>;
             })}
@@ -117,8 +117,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
   };
 
   if (!question || !question.options) return (
-     <div className="bg-white/50 backdrop-blur-xl p-8 rounded-[2rem] text-center text-slate-500 border border-slate-200">
-        <AlertTriangle className="mx-auto mb-2 text-amber-500" />
+     <div className="bg-theme-glass backdrop-blur-xl p-8 rounded-[2rem] text-center text-theme-muted border border-theme-border">
         <p>Memuat Kartu Soal...</p>
         <p className="text-xs opacity-50 mt-1">Data sedang disiapkan...</p>
      </div>
@@ -147,10 +146,10 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
       transition={{ duration: 0.3, ease: "easeInOut" }}
       className="relative w-full"
     >
-      <div className="bg-white/50 backdrop-blur-2xl border border-white/80 rounded-[2rem] p-6 md:p-10 shadow-xl shadow-indigo-500/10 relative">
+      <div className="bg-theme-glass backdrop-blur-2xl border border-theme-border rounded-[2rem] p-6 md:p-10 shadow-xl shadow-indigo-500/5 relative">
         
         <div className="flex justify-center mb-6">
-           <span className="inline-flex items-center px-4 py-1.5 rounded-full bg-indigo-50 border border-indigo-100 text-indigo-600 text-xs font-bold uppercase tracking-wider shadow-sm">
+           <span className="inline-flex items-center px-4 py-1.5 rounded-full bg-theme-primary/10 border border-theme-primary/20 text-theme-primary text-xs font-bold uppercase tracking-wider shadow-sm">
              <Sparkles size={12} className="mr-2" />
              {question.keyPoint || "Konsep Kunci"}
            </span>
@@ -160,20 +159,20 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
           onClick={speakQuestion}
           className={`
             absolute top-6 right-6 p-2 rounded-full transition-all duration-200
-            ${speaking ? 'bg-indigo-100 text-indigo-600 animate-pulse' : 'bg-white/50 text-slate-400 hover:bg-white hover:text-indigo-500'}
+            ${speaking ? 'bg-theme-primary/10 text-theme-primary animate-pulse' : 'bg-theme-bg/50 text-theme-muted hover:bg-theme-bg hover:text-theme-primary'}
           `}
           title="Bacakan Soal"
         >
           {speaking ? <Volume2 size={20} /> : <Volume2 size={20} className="opacity-50" />}
         </button>
 
-        <h2 className="text-xl md:text-2xl font-medium text-slate-800 text-center mb-8 leading-snug tracking-tight px-2 md:px-8">
+        <h2 className="text-xl md:text-2xl font-medium text-theme-text text-center mb-8 leading-snug tracking-tight px-2 md:px-8">
           <FormattedText text={question.text} />
         </h2>
 
         <div className="grid grid-cols-1 gap-3">
           {safeOptions.map((option, idx) => {
-            let styles = "bg-white/70 border-white/60 text-slate-600 hover:bg-white hover:border-indigo-200";
+            let styles = "bg-theme-bg/40 border-theme-border text-theme-text hover:bg-theme-bg hover:border-theme-primary/50";
             
             if (isAnswered) {
                if (idx === question.correctIndex) {
@@ -181,7 +180,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
                } else if (idx === selectedOption) {
                  styles = "bg-rose-100 border-rose-200 text-rose-500 opacity-80";
                } else {
-                 styles = "bg-slate-50 border-transparent text-slate-300 opacity-50";
+                 styles = "bg-theme-bg/20 border-transparent text-theme-muted opacity-50";
                }
             }
 
@@ -205,7 +204,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
                   hidden md:flex items-center justify-center w-6 h-6 rounded-md text-xs font-bold mr-4 border transition-colors
                   ${isAnswered 
                     ? 'border-transparent bg-white/20 text-current' 
-                    : 'border-slate-300 text-slate-400 bg-white group-hover:border-indigo-300 group-hover:text-indigo-500'}
+                    : 'border-theme-border text-theme-muted bg-theme-bg group-hover:border-theme-primary group-hover:text-theme-primary'}
                 `}>
                   {shortcuts[idx]}
                 </span>
@@ -234,17 +233,17 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
               rounded-3xl p-6 border-2 
               ${selectedOption === question.correctIndex 
                 ? 'bg-emerald-50/80 border-emerald-100' 
-                : 'bg-white/60 border-indigo-100'}
+                : 'bg-theme-glass border-theme-border'}
             `}>
               <div className="flex items-start gap-4">
-                 <div className={`p-3 rounded-2xl shrink-0 ${selectedOption === question.correctIndex ? 'bg-emerald-100 text-emerald-600' : 'bg-indigo-100 text-indigo-600'}`}>
+                 <div className={`p-3 rounded-2xl shrink-0 ${selectedOption === question.correctIndex ? 'bg-emerald-100 text-emerald-600' : 'bg-theme-primary/10 text-theme-primary'}`}>
                    <Lightbulb size={24} />
                  </div>
                  <div className="flex-1">
-                   <h3 className="font-bold text-slate-800 text-lg mb-1">
+                   <h3 className="font-bold text-theme-text text-lg mb-1">
                      {selectedOption === question.correctIndex ? "Tepat Sekali!" : "Pembahasan"}
                    </h3>
-                   <div className="text-slate-600 text-sm leading-relaxed whitespace-pre-line">
+                   <div className="text-theme-text/80 text-sm leading-relaxed whitespace-pre-line">
                      <FormattedText text={question.explanation} />
                    </div>
                  </div>
@@ -270,29 +269,29 @@ const QuestionCard: React.FC<QuestionCardProps> = ({
 // --- REACTIVE MASCOT COMPONENT ---
 const QuizMascot: React.FC<{ state: 'idle' | 'happy' | 'sad' | 'streak', streak: number }> = ({ state, streak }) => {
   let kaomoji = "( •_•)";
-  let color = "text-slate-400";
-  let bg = "bg-slate-100/50";
+  let color = "text-theme-muted";
+  let bg = "bg-theme-bg/80";
 
   switch (state) {
     case 'happy':
       kaomoji = "( ^ ▽ ^ )";
       color = "text-emerald-500";
-      bg = "bg-emerald-100";
+      bg = "bg-emerald-100/90";
       break;
     case 'sad':
       kaomoji = "( > _ < )";
       color = "text-rose-500";
-      bg = "bg-rose-100";
+      bg = "bg-rose-100/90";
       break;
     case 'streak':
       kaomoji = "( ⌐■_■ )";
-      color = "text-indigo-500";
-      bg = "bg-indigo-100";
+      color = "text-theme-primary";
+      bg = "bg-theme-primary/10";
       break;
     default:
       kaomoji = "( •_•)";
-      color = "text-slate-400";
-      bg = "bg-slate-100/50";
+      color = "text-theme-muted";
+      bg = "bg-theme-glass";
   }
 
   return (
@@ -303,7 +302,7 @@ const QuizMascot: React.FC<{ state: 'idle' | 'happy' | 'sad' | 'streak', streak:
         className={`fixed top-24 right-4 md:right-8 z-30 px-3 py-1.5 rounded-full backdrop-blur-md border border-white/50 shadow-sm flex items-center space-x-2 ${bg}`}
      >
         <span className={`font-black text-sm whitespace-nowrap ${color}`}>{kaomoji}</span>
-        {streak > 2 && state !== 'sad' && <span className="text-[10px] font-bold text-slate-500">x{streak}</span>}
+        {streak > 2 && state !== 'sad' && <span className="text-[10px] font-bold text-theme-muted opacity-60">x{streak}</span>}
      </motion.div>
   );
 }
@@ -331,9 +330,26 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
   const [timeLeft, setTimeLeft] = useState(20);
   const [mascotState, setMascotState] = useState<'idle' | 'happy' | 'sad' | 'streak'>('idle');
 
-  const currentQuestion = (questions && questions.length > 0) ? questions[currentIndex] : null;
+  const [isGestureEnabled, setIsGestureEnabled] = useState(false);
 
-  // --- LOGIC HANDLERS (Needed for Voice Control) ---
+  useEffect(() => {
+    setIsGestureEnabled(getGestureEnabled());
+  }, []);
+
+  // SAFETY CHECK
+  if (!questions || questions.length === 0) {
+      return (
+          <div className="p-10 text-center">
+             <h2 className="text-xl font-bold text-theme-text mb-2">Error</h2>
+             <p className="text-theme-muted mb-4">Data soal tidak ditemukan.</p>
+             <button onClick={onExit} className="px-4 py-2 bg-theme-primary text-white rounded-xl">Kembali</button>
+          </div>
+      );
+  }
+
+  const currentQuestion = (currentIndex < questions.length) ? questions[currentIndex] : null;
+
+  // --- LOGIC HANDLERS ---
   const handleAnswer = useCallback((index: number, isCorrect: boolean) => {
     if (!currentQuestion) return;
     
@@ -431,13 +447,10 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
     }
   }, [currentIndex, questions, answers, playClick]);
 
-  // --- VOICE CONTROL HOOK ---
-  const { isListening, toggleListening, lastTranscript, feedbackMsg, error: voiceError, isSupported } = useVoiceControl({
-     onOptionSelect: handleOptionSelect,
-     onNext: handleNext,
-     onPrev: handlePrev,
-     isAnswered
-  });
+  // --- TOGGLE GESTURE HANDLER ---
+  const toggleGesture = () => {
+    setIsGestureEnabled(prev => !prev);
+  };
 
   // --- TIMER LOGIC ---
   useEffect(() => {
@@ -509,27 +522,28 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
     }
   };
 
-  if (!questions || questions.length === 0) return <div>Error loading quiz</div>;
-  if (!currentQuestion) return <div>Loading...</div>;
+  if (!currentQuestion) return <div className="p-10 text-center">Loading Question...</div>;
 
   return (
-    <div className="max-w-3xl mx-auto px-4">
+    <div className="max-w-3xl mx-auto px-4 relative">
       <QuizMascot state={mascotState} streak={streak} />
       
-      {/* VOICE FEEDBACK FLOATING UI */}
-      <VoiceFeedback 
-         isListening={isListening} 
-         lastTranscript={lastTranscript} 
-         feedbackMsg={feedbackMsg} 
-         error={voiceError} 
-      />
+      {/* EXPERIMENTAL: GESTURE CONTROL UI */}
+      {isGestureEnabled && (
+        <GestureControl 
+          onOptionSelect={handleOptionSelect}
+          onNext={handleNext}
+          onPrev={handlePrev}
+          isAnswered={isAnswered}
+        />
+      )}
 
       <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
         
         <div className="flex items-center gap-2">
           <button 
              onClick={onExit}
-             className="p-2.5 bg-white border border-slate-200 rounded-xl text-slate-500 hover:bg-slate-50 hover:text-slate-600 hover:border-slate-300 transition-all shadow-sm"
+             className="p-2.5 bg-theme-glass border border-theme-border rounded-xl text-theme-muted hover:bg-theme-bg hover:text-theme-text transition-all shadow-sm"
              title="Menu Utama"
           >
              <LogOut size={18} />
@@ -538,36 +552,34 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
           {onDelete && (
             <button 
                onClick={handleDeleteQuiz}
-               className="p-2.5 bg-white border border-slate-200 rounded-xl text-rose-300 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition-all shadow-sm"
+               className="p-2.5 bg-theme-glass border border-theme-border rounded-xl text-rose-400 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition-all shadow-sm"
                title="Buang Soal"
             >
                <Trash2 size={18} />
             </button>
           )}
 
-          <div className="w-px h-6 bg-slate-200 mx-1" />
+          <div className="w-px h-6 bg-theme-border mx-1" />
 
-          {/* VOICE TOGGLE BUTTON */}
-          {isSupported && (
-             <button
-                onClick={toggleListening}
-                className={`p-2.5 border rounded-xl transition-all shadow-sm flex items-center gap-2 ${isListening ? 'bg-indigo-50 border-indigo-200 text-indigo-600 animate-pulse' : 'bg-white border-slate-200 text-slate-400 hover:text-slate-600'}`}
-                title="Hands-free Voice Mode"
-             >
-                {isListening ? <Mic size={18} /> : <MicOff size={18} />}
-             </button>
-          )}
+          {/* GESTURE TOGGLE */}
+          <button
+             onClick={toggleGesture}
+             className={`p-2.5 border rounded-xl transition-all shadow-sm flex items-center gap-2 ${isGestureEnabled ? 'bg-theme-primary/10 border-theme-primary text-theme-primary' : 'bg-theme-glass border-theme-border text-theme-muted hover:text-theme-text'}`}
+             title="Toggle Gesture Control (Experimental)"
+          >
+             <Hand size={18} />
+          </button>
 
           <button 
              onClick={handlePrev}
              disabled={currentIndex === 0}
-             className={`p-2.5 bg-white border border-slate-200 rounded-xl transition-all shadow-sm ${currentIndex === 0 ? 'opacity-50 cursor-not-allowed text-slate-300' : 'text-slate-500 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200'}`}
+             className={`p-2.5 bg-theme-glass border border-theme-border rounded-xl transition-all shadow-sm ${currentIndex === 0 ? 'opacity-50 cursor-not-allowed text-theme-muted/50' : 'text-theme-muted hover:bg-theme-bg hover:text-theme-primary hover:border-theme-primary/50'}`}
           >
              <ArrowLeft size={18} />
           </button>
 
-          <div className="ml-2 bg-white/40 backdrop-blur-md px-4 py-2 rounded-2xl border border-white/50 text-slate-600 font-semibold text-sm shadow-sm">
-            {currentIndex + 1} <span className="text-slate-400 font-normal">/ {questions.length}</span>
+          <div className="ml-2 bg-theme-glass backdrop-blur-md px-4 py-2 rounded-2xl border border-theme-border text-theme-text font-semibold text-sm shadow-sm">
+            {currentIndex + 1} <span className="text-theme-muted font-normal">/ {questions.length}</span>
           </div>
           
           <AnimatePresence>
@@ -589,9 +601,9 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
         <div className="flex-1 flex justify-center flex-wrap gap-1.5 px-4 overflow-x-auto max-w-full">
            {questions.map((q, idx) => {
              const answer = answers.find(a => a.questionId === q.id);
-             let dotClass = "bg-white/30 border-slate-200";
+             let dotClass = "bg-theme-bg/30 border-theme-border";
              
-             if (idx === currentIndex) dotClass = "bg-indigo-500 border-indigo-500 scale-110 shadow-md ring-2 ring-indigo-200";
+             if (idx === currentIndex) dotClass = "bg-theme-primary border-theme-primary scale-110 shadow-md ring-2 ring-theme-primary/30";
              else if (answer?.isCorrect) dotClass = "bg-emerald-400 border-emerald-400";
              else if (answer && !answer.isCorrect) dotClass = "bg-rose-400 border-rose-400";
              
@@ -614,7 +626,7 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
             </div>
           )}
            {mode === QuizMode.TIME_RUSH && (
-            <div className={`flex items-center space-x-1 px-3 py-2 rounded-2xl border ${timeLeft < 5 ? 'bg-red-100 text-red-600 border-red-200' : 'bg-indigo-50 text-indigo-600 border-indigo-200'}`}>
+            <div className={`flex items-center space-x-1 px-3 py-2 rounded-2xl border ${timeLeft < 5 ? 'bg-red-100 text-red-600 border-red-200' : 'bg-theme-primary/10 text-theme-primary border-theme-primary/30'}`}>
               <Clock size={18} />
               <span className="font-bold text-sm">{timeLeft}s</span>
             </div>

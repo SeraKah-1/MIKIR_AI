@@ -1,7 +1,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { RefreshCw, Download, RotateCcw, Share2, Layers, FileJson, Activity, Trophy, Brain, Zap, Target, BookOpen, PlayCircle, Trash2 } from 'lucide-react';
+import { RefreshCw, Download, RotateCcw, Share2, Layers, FileJson, Activity, Trophy, Brain, Zap, Target, BookOpen, PlayCircle, Trash2, PlusCircle, ArrowRight } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { QuizResult, Question, SkillAnalysis } from '../types';
 import { GlassButton } from './GlassButton';
@@ -15,10 +15,10 @@ interface ResultScreenProps {
   onReset: () => void;
   onRetryMistakes: () => void;
   onRetryAll: () => void;
-  onDelete?: () => void; // Added Prop
+  onDelete?: () => void;
+  onAddMore?: (count: number) => void; // New Prop
 }
 
-// Sub-component for a single skill bar
 const SkillBar: React.FC<{ label: string; score: number; icon: any; color: string }> = ({ label, score, icon: Icon, color }) => (
   <div className="mb-4">
     <div className="flex justify-between items-center mb-1">
@@ -39,11 +39,13 @@ const SkillBar: React.FC<{ label: string; score: number; icon: any; color: strin
   </div>
 );
 
-export const ResultScreen: React.FC<ResultScreenProps> = ({ result, questions, onReset, onRetryMistakes, onRetryAll, onDelete }) => {
+export const ResultScreen: React.FC<ResultScreenProps> = ({ result, questions, onReset, onRetryMistakes, onRetryAll, onDelete, onAddMore }) => {
   const percentage = Math.round((result.correctCount / result.totalQuestions) * 100);
   const { playFanfare, playClick } = useGameSound();
   const [showFlashcards, setShowFlashcards] = useState(false);
   const [analysis, setAnalysis] = useState<SkillAnalysis | null>(null);
+  const [isAdding, setIsAdding] = useState(false); // UI State for adding questions
+  const [addCount, setAddCount] = useState<string>("10"); // Use string to handle input better
   
   let gradeColor = "text-indigo-600";
   let gradeMessage = "Luar Biasa";
@@ -63,21 +65,15 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ result, questions, o
     if (percentage >= 70) {
       confetti({ particleCount: 50, origin: { y: 0.6 } });
     }
-    
-    // Calculate Algorithmic Analysis (Local, no AI)
     calculateSkills();
   }, [percentage, playFanfare]);
 
   const calculateSkills = () => {
-     // Advanced Logic: If AI is lazy and sets all difficulty to "Medium", we use question LENGTH to infer complexity.
-     // Short (< 60 chars) = Memory/Concept. Long (> 120 chars) = Analysis. Medium = Application.
-     
      const categorized = questions.map(q => {
         let inferredType = 'Application';
         if (q.difficulty === 'Easy') inferredType = 'Memory';
         else if (q.difficulty === 'Hard') inferredType = 'Logic';
         else {
-           // Fallback inference if difficulty is generic "Medium"
            if (q.text.length < 60) inferredType = 'Memory';
            else if (q.text.length > 150) inferredType = 'Logic';
            else inferredType = 'Application';
@@ -87,7 +83,7 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ result, questions, o
 
      const getScoreByType = (type: string) => {
        const subset = categorized.filter(q => q.inferredType === type);
-       if (subset.length === 0) return percentage; // Fallback to overall score if category empty
+       if (subset.length === 0) return percentage;
        
        const correct = subset.filter(q => {
          const ans = result.answers.find(a => a.questionId === q.id);
@@ -100,15 +96,12 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ result, questions, o
      const logicScore = getScoreByType('Logic');
      const appScore = getScoreByType('Application');
      
-     // Focus Score: Based on Streak consistency and answering simple questions right
      let focusScore = 80;
-     // Penalize if Easy/Memory questions are wrong
      const memoryMistakes = categorized.filter(q => q.inferredType === 'Memory').filter(q => {
          const ans = result.answers.find(a => a.questionId === q.id);
          return ans && !ans.isCorrect;
      }).length;
      focusScore -= (memoryMistakes * 15);
-     // Bonus for getting Hard/Logic questions right
      const logicWins = categorized.filter(q => q.inferredType === 'Logic').filter(q => {
          const ans = result.answers.find(a => a.questionId === q.id);
          return ans && ans.isCorrect;
@@ -117,7 +110,6 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ result, questions, o
      
      focusScore = Math.max(0, Math.min(100, focusScore));
 
-     // Construct Insight Text
      let feedback = "";
      if (logicScore < memoryScore - 20) feedback = "Kekuatanmu ada di hafalan fakta, tapi perlu latihan analisis soal panjang.";
      else if (memoryScore < logicScore - 20) feedback = "Logikamu tajam! Tapi hati-hati, kamu sering melewatkan definisi dasar.";
@@ -134,19 +126,6 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ result, questions, o
      });
   };
 
-  const handleDownloadText = () => {
-    playClick();
-    const content = questions.map((q, i) => {
-      const answer = result.answers.find(a => a.questionId === q.id);
-      return `[NO. ${i + 1}] ${answer?.isCorrect ? "✅" : "❌"} ${q.text}`;
-    }).join('\n');
-    const blob = new Blob([content], { type: 'text/plain' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `Mikir-Result-${Date.now()}.txt`;
-    a.click();
-  };
-
   const handleExportJSON = () => {
     playClick();
     const exportData = { questions, meta: { score: percentage } };
@@ -155,6 +134,16 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ result, questions, o
     a.href = URL.createObjectURL(blob);
     a.download = `Mikir-Export-${Date.now()}.glassquiz`;
     a.click();
+  };
+
+  const handleAddMoreSubmit = () => {
+    const val = parseInt(addCount);
+    if (isNaN(val) || val < 1 || val > 50) {
+      alert("Masukkan jumlah soal antara 1 - 50");
+      return;
+    }
+    setIsAdding(true);
+    if (onAddMore) onAddMore(val);
   };
 
   return (
@@ -193,7 +182,7 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ result, questions, o
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-        {/* LEFT: DETAILED STATS (SKILL BARS) */}
+        {/* LEFT: STATS */}
         <motion.div 
           initial={{ x: -20, opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}
@@ -229,6 +218,36 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ result, questions, o
            transition={{ delay: 0.3 }}
            className="flex flex-col justify-center space-y-4"
         >
+          {/* Add Questions Section (New) */}
+          {onAddMore && !isAdding && (
+             <div className="bg-gradient-to-r from-violet-500/10 to-fuchsia-500/10 p-4 rounded-2xl border border-violet-200/50">
+                <p className="text-xs font-bold text-violet-600 mb-2 text-center uppercase tracking-wide">Kurang Puas? Tambah Soal!</p>
+                <div className="flex gap-2">
+                   <div className="relative flex-1">
+                      <input 
+                        type="number" 
+                        min="1" 
+                        max="50" 
+                        value={addCount} 
+                        onChange={(e) => setAddCount(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl border border-violet-200 text-center font-bold text-violet-700 focus:outline-none focus:ring-2 focus:ring-violet-400"
+                      />
+                      <span className="absolute right-3 top-2.5 text-xs text-violet-400 font-bold pointer-events-none">Soal</span>
+                   </div>
+                   <button onClick={handleAddMoreSubmit} className="bg-violet-600 text-white px-4 py-2 rounded-xl text-xs font-bold shadow-md hover:bg-violet-700 flex items-center justify-center transition-colors">
+                      <PlusCircle size={14} className="mr-1" /> Generate
+                   </button>
+                </div>
+             </div>
+          )}
+          
+          {isAdding && (
+             <div className="bg-white/50 p-4 rounded-2xl border border-indigo-100 text-center">
+                <RefreshCw className="animate-spin mx-auto text-indigo-500 mb-2" />
+                <p className="text-xs font-bold text-indigo-600">Sedang membuat soal tambahan...</p>
+             </div>
+          )}
+
           {wrongAnswersCount > 0 && (
             <GlassButton onClick={onRetryMistakes} variant="danger" className="flex justify-center py-4">
               <RotateCcw size={18} className="mr-2" /> Perbaiki {wrongAnswersCount} Kesalahan
