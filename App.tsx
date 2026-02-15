@@ -146,7 +146,9 @@ const App: React.FC = () => {
     // Use setTimeout to allow React to render the LoadingScreen before heavy lifting
     setTimeout(async () => {
         try {
+            // Extract existing texts to prevent duplicates
             const existingTexts = originalQuestions.map(q => q.text);
+            
             const apiKey = getApiKey(lastConfig.config.provider);
             if (!apiKey) throw new Error("API Key missing");
       
@@ -157,14 +159,14 @@ const App: React.FC = () => {
               const res = await generateQuiz(
                 apiKey, file, config.topic, config.modelId, count, config.mode, config.examStyle,
                 (status) => setLoadingStatus(status),
-                existingTexts
+                existingTexts // Pass full text list for deduplication
               );
               newQuestions = res.questions;
             } else {
               const res = await generateQuizGroq(
                 apiKey, file, config.topic, config.modelId, count, config.mode, config.examStyle,
                 (status) => setLoadingStatus(status),
-                existingTexts
+                existingTexts // Pass full text list for deduplication
               );
               newQuestions = res.questions;
             }
@@ -362,7 +364,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen p-4 md:p-8 relative pb-24 transition-colors duration-500">
+    <div className="min-h-[100dvh] p-4 md:p-8 relative pb-24 transition-colors duration-500">
       <button 
         onClick={() => setShowAnalysis(!showAnalysis)}
         className="fixed top-6 right-6 z-40 p-2 rounded-full bg-theme-glass border border-theme-border text-theme-muted hover:bg-theme-bg shadow-sm"

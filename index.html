@@ -3,7 +3,12 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Viewport adjustment for Mobile Safari & Chrome Android (Prevent auto-zoom on inputs) -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#eef2ff" />
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    
     <title>Mikir ( •_•)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -28,7 +33,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     
-    <!-- PDF.js for Client-Side PDF Parsing (Groq Support) -->
+    <!-- PDF.js Main Library (Must match the worker version in groqService.ts) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     
     <style>
@@ -51,6 +56,8 @@
         color: var(--text-main);
         overflow-x: hidden;
         transition: background-color 0.5s ease, color 0.5s ease;
+        /* Fix mobile bounce scroll */
+        overscroll-behavior-y: none;
       }
 
       .mesh-bg {
@@ -58,7 +65,8 @@
         top: 0;
         left: 0;
         width: 100vw;
-        height: 100vh;
+        height: 100vh; /* Fallback */
+        height: 100dvh; /* Mobile friendly */
         z-index: -1;
         background-color: var(--app-bg);
         background-image: 

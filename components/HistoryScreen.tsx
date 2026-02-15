@@ -55,8 +55,6 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) =
   }, []);
 
   const refreshLocal = async () => {
-    // Local storage is sync/fast, no need to show loading spinner usually
-    // But we keep it async in signature for consistency
     const data = await getSavedQuizzes();
     setLocalHistory(data);
   };
@@ -99,7 +97,6 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) =
      try {
        await downloadFromCloud(item);
        setActiveMenuId(null);
-       // Langsung tawarkan pindah tab
        if (confirm(`Berhasil disimpan! Buka tab "Local" untuk melihat?`)) {
           setViewMode('local');
           refreshLocal();
@@ -175,7 +172,7 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) =
             </div>
             
             {/* View Switcher */}
-            <div className="bg-slate-100 p-1 rounded-xl flex shadow-inner">
+            <div className="bg-slate-100 p-1 rounded-xl flex shadow-inner shrink-0">
                <button 
                  onClick={() => switchView('local')} 
                  className={`flex items-center px-4 py-2 rounded-lg text-sm font-bold transition-all ${viewMode === 'local' ? 'bg-white shadow text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
@@ -252,7 +249,6 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) =
                return (
                  <motion.div
                    key={item.id}
-                   // OPTIMIZATION: Simplified animations for list items to reduce GPU load
                    initial={{ opacity: 0, y: 10 }}
                    animate={{ opacity: 1, y: 0 }}
                    exit={{ opacity: 0, scale: 0.95 }}
@@ -262,53 +258,61 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) =
                     {/* Decorative Gradient Bar */}
                     <div className={`absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl ${modeBadge.color.replace('bg-', 'bg-').replace('text-', 'bg-').split(' ')[0]}`} />
 
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pl-3">
+                    {/* CSS GRID LAYOUT: Fixes overflowing text pushing buttons */}
+                    <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-4 pl-3 items-center">
                        
-                       {/* MAIN INFO */}
-                       <div className="flex-1 min-w-0" onClick={() => onLoadHistory(item)}>
-                          <div className="flex items-center gap-2 mb-1">
-                             <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${modeBadge.color}`}>
+                       {/* LEFT SIDE (TEXT CONTENT) */}
+                       <div className="space-y-2 cursor-pointer" onClick={() => onLoadHistory(item)}>
+                          
+                          {/* Top Meta */}
+                          <div className="flex items-center gap-2">
+                             <span className={`text-[10px] font-bold px-2 py-0.5 rounded border whitespace-nowrap ${modeBadge.color}`}>
                                 {modeBadge.label}
                              </span>
-                             <span className="text-[10px] text-slate-400 flex items-center">
+                             <span className="text-[10px] text-slate-400 flex items-center whitespace-nowrap">
                                 <Clock size={10} className="mr-1" />
                                 {new Date(item.date).toLocaleDateString()}
                              </span>
                           </div>
 
+                          {/* Title Area */}
                           {editingId === item.id ? (
-                            <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
+                            <div className="flex items-center gap-2 w-full" onClick={e => e.stopPropagation()}>
                                <input 
                                  autoFocus 
                                  value={tempName} 
                                  onChange={e => setTempName(e.target.value)} 
                                  onBlur={() => handleRename(item.id)}
                                  onKeyDown={e => e.key === 'Enter' && handleRename(item.id)}
-                                 className="font-bold text-lg bg-indigo-50 px-2 rounded outline-none w-full"
+                                 className="font-bold text-lg bg-indigo-50 px-2 py-1 rounded outline-none w-full border border-indigo-200 text-indigo-900"
                                />
-                               <button onClick={() => handleRename(item.id)} className="p-1 bg-indigo-500 text-white rounded"><CheckCircle2 size={16}/></button>
+                               <button onClick={() => handleRename(item.id)} className="p-1.5 bg-indigo-500 text-white rounded shrink-0"><CheckCircle2 size={18}/></button>
                             </div>
                           ) : (
-                            <h3 className="font-bold text-lg text-slate-800 truncate cursor-pointer hover:text-indigo-600 transition-colors">
+                            <h3 
+                                className="font-bold text-lg text-slate-800 line-clamp-2 leading-tight break-words pr-2 hover:text-indigo-600 transition-colors"
+                                title={item.fileName} 
+                            >
                               {item.fileName}
                             </h3>
                           )}
                           
-                          <div className="flex items-center gap-2 mt-2">
+                          {/* Tags */}
+                          <div className="flex items-center gap-2 flex-wrap">
                              {item.topicSummary && (
-                               <span className="inline-flex items-center text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded-md">
-                                 <Tag size={12} className="mr-1" /> #{item.topicSummary.split(' ')[0]}
+                               <span className="inline-flex items-center text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded-md max-w-full">
+                                 <Tag size={12} className="mr-1 shrink-0" /> <span className="truncate max-w-[150px]">{item.topicSummary}</span>
                                </span>
                              )}
-                             <span className="text-xs text-slate-400">{item.questionCount} Soal</span>
+                             <span className="text-xs text-slate-400 shrink-0">{item.questionCount} Soal</span>
                           </div>
                        </div>
 
-                       {/* SCORE & ACTIONS */}
-                       <div className="flex items-center justify-between md:justify-end gap-4 border-t md:border-t-0 pt-4 md:pt-0 border-slate-100">
+                       {/* RIGHT SIDE (ACTIONS & SCORE) */}
+                       <div className="flex items-center justify-between md:justify-end gap-4 w-full md:w-auto border-t md:border-t-0 pt-4 md:pt-0 border-slate-100">
                           
                           {/* Score Badge */}
-                          <div className={`flex flex-col items-center justify-center w-16 h-16 rounded-2xl border ${scoreColor}`}>
+                          <div className={`flex flex-col items-center justify-center w-16 h-16 rounded-2xl border shrink-0 ${scoreColor}`}>
                              {item.lastScore !== undefined && item.lastScore !== null ? (
                                <>
                                  <span className="text-xl font-black">{item.lastScore}</span>
@@ -319,60 +323,61 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) =
                              )}
                           </div>
 
-                          {/* Action Buttons */}
-                          <div className="flex md:flex-col gap-2">
+                          {/* Buttons Group */}
+                          <div className="flex gap-2">
                              <button 
                                onClick={() => onLoadHistory(item)}
-                               className="p-2 bg-indigo-600 text-white rounded-xl shadow hover:bg-indigo-700 transition-colors"
+                               className="p-3 bg-indigo-600 text-white rounded-xl shadow-md hover:bg-indigo-700 hover:shadow-lg transition-all active:scale-95 shrink-0"
                                title="Mainkan"
                              >
-                               <Play size={18} fill="currentColor" />
+                               <Play size={20} fill="currentColor" />
                              </button>
 
                              <div className="relative">
                                <button 
                                  onClick={(e) => { e.stopPropagation(); setActiveMenuId(activeMenuId === item.id ? null : item.id); }}
-                                 className="p-2 bg-white border border-slate-200 text-slate-500 rounded-xl hover:bg-slate-50 transition-colors"
+                                 className={`p-3 border rounded-xl transition-all shrink-0 ${activeMenuId === item.id ? 'bg-slate-100 border-slate-300 text-slate-800' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
                                >
-                                 <MoreVertical size={18} />
+                                 <MoreVertical size={20} />
                                </button>
 
                                {/* Dropdown Menu */}
                                <AnimatePresence>
                                  {activeMenuId === item.id && (
                                    <motion.div 
-                                     initial={{ opacity: 0, scale: 0.95, y: 10 }} 
-                                     animate={{ opacity: 1, scale: 1, y: 0 }} 
+                                     initial={{ opacity: 0, scale: 0.95, y: 10, x: 0 }} 
+                                     animate={{ opacity: 1, scale: 1, y: 0, x: 0 }} 
                                      exit={{ opacity: 0, scale: 0.95 }}
                                      transition={{ duration: 0.1 }}
                                      className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-2xl border border-slate-100 z-50 overflow-hidden"
+                                     style={{ transformOrigin: 'top right' }}
                                      onClick={e => e.stopPropagation()}
                                    >
                                       <div className="p-1">
-                                        <button onClick={() => { openEditModal(item); setActiveMenuId(null); }} className="w-full text-left px-3 py-2 text-sm text-slate-600 hover:bg-indigo-50 hover:text-indigo-600 rounded-lg flex items-center font-medium">
+                                        <button onClick={() => { openEditModal(item); setActiveMenuId(null); }} className="w-full text-left px-3 py-2 text-sm text-slate-600 hover:bg-indigo-50 hover:text-indigo-600 rounded-lg flex items-center font-medium transition-colors">
                                           <Edit3 size={14} className="mr-2" /> Edit Soal
                                         </button>
                                         
                                         {viewMode === 'local' && (
                                           <>
-                                            <button onClick={() => { setEditingId(item.id); setTempName(item.fileName); setActiveMenuId(null); }} className="w-full text-left px-3 py-2 text-sm text-slate-600 hover:bg-indigo-50 hover:text-indigo-600 rounded-lg flex items-center font-medium">
+                                            <button onClick={() => { setEditingId(item.id); setTempName(item.fileName); setActiveMenuId(null); }} className="w-full text-left px-3 py-2 text-sm text-slate-600 hover:bg-indigo-50 hover:text-indigo-600 rounded-lg flex items-center font-medium transition-colors">
                                               <Edit2 size={14} className="mr-2" /> Rename
                                             </button>
-                                            <button onClick={() => { handleUpload(item); setActiveMenuId(null); }} className="w-full text-left px-3 py-2 text-sm text-emerald-600 hover:bg-emerald-50 rounded-lg flex items-center font-medium">
+                                            <button onClick={() => { handleUpload(item); setActiveMenuId(null); }} className="w-full text-left px-3 py-2 text-sm text-emerald-600 hover:bg-emerald-50 rounded-lg flex items-center font-medium transition-colors">
                                               <CloudUpload size={14} className="mr-2" /> Upload Cloud
                                             </button>
                                           </>
                                         )}
 
                                         {viewMode === 'cloud' && (
-                                          <button onClick={() => { handleDownload(item); }} className="w-full text-left px-3 py-2 text-sm text-indigo-600 hover:bg-indigo-50 rounded-lg flex items-center font-medium">
+                                          <button onClick={() => { handleDownload(item); }} className="w-full text-left px-3 py-2 text-sm text-indigo-600 hover:bg-indigo-50 rounded-lg flex items-center font-medium transition-colors">
                                             <Download size={14} className="mr-2" /> Simpan ke Local
                                           </button>
                                         )}
                                         
                                         <div className="h-px bg-slate-100 my-1" />
                                         
-                                        <button onClick={() => { handleDelete(item.id); setActiveMenuId(null); }} className="w-full text-left px-3 py-2 text-sm text-rose-600 hover:bg-rose-50 rounded-lg flex items-center font-medium">
+                                        <button onClick={() => { handleDelete(item.id); setActiveMenuId(null); }} className="w-full text-left px-3 py-2 text-sm text-rose-600 hover:bg-rose-50 rounded-lg flex items-center font-medium transition-colors">
                                           <Trash2 size={14} className="mr-2" /> Hapus
                                         </button>
                                       </div>

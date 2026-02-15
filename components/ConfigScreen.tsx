@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Upload, FileText, Layout, Zap, TrendingUp, Skull, BookOpen, BrainCircuit, Briefcase, Target, Type, Cpu, Cloud, RefreshCw, Layers, X, Edit3, PlayCircle } from 'lucide-react';
+import { Upload, FileText, Layout, Zap, TrendingUp, Skull, BookOpen, BrainCircuit, Briefcase, Target, Type, Cpu, Cloud, RefreshCw, Layers, X, Edit3, PlayCircle, CheckCircle2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AVAILABLE_MODELS, ModelConfig, QuizMode, ExamStyle, AiProvider, CloudNote, Question } from '../types';
 import { GlassButton } from './GlassButton';
@@ -21,6 +21,10 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
   const [inputMethod, setInputMethod] = useState<'file' | 'topic' | 'cloud'>('file');
   const [file, setFile] = useState<File | null>(null);
   
+  // File Upload Visual States
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  
   // Topic state is now used for ALL modes as the "Quiz Title/Focus"
   const [topic, setTopic] = useState(''); 
   
@@ -37,6 +41,9 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
   const [dueCards, setDueCards] = useState<Question[]>([]);
   const [isReviewing, setIsReviewing] = useState(false);
   const [isSchedulerOpen, setIsSchedulerOpen] = useState(false);
+  
+  // Start Button Loading State
+  const [isGenerating, setIsGenerating] = useState(false);
 
   useEffect(() => {
     const dueItems = getDueItems();
@@ -63,25 +70,49 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
     else if (e.type === "dragleave") setDragActive(false);
   };
 
+  // --- FILE HANDLING WITH FAKE PROGRESS ---
+  const processUploadedFile = (f: File) => {
+    setIsUploading(true);
+    setUploadProgress(0);
+    setFile(null); // Reset previous file while loading
+
+    // Simulate upload/scan progress (1.2 second duration)
+    const interval = setInterval(() => {
+       setUploadProgress((prev) => {
+          if (prev >= 100) {
+             clearInterval(interval);
+             // Finish
+             setFile(f);
+             // Auto-fill topic with filename
+             setTopic(f.name.replace(/\.[^/.]+$/, ""));
+             setIsUploading(false);
+             return 100;
+          }
+          return prev + 10; // Increment 10%
+       });
+    }, 80);
+  };
+
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const droppedFile = e.dataTransfer.files[0];
-      setFile(droppedFile);
-      setInputMethod('file');
-      // Auto-fill topic with filename for convenience, but user can edit
-      setTopic(droppedFile.name.replace(/\.[^/.]+$/, "")); 
+      processUploadedFile(e.dataTransfer.files[0]);
     }
   };
 
   const handleChangeFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-       const f = e.target.files[0];
-       setFile(f);
-       setTopic(f.name.replace(/\.[^/.]+$/, ""));
+       processUploadedFile(e.target.files[0]);
     }
+  };
+  
+  const handleRemoveFile = (e: React.MouseEvent) => {
+     e.stopPropagation(); // Prevent triggering click on parent
+     setFile(null);
+     setTopic('');
+     setUploadProgress(0);
   };
 
   const handleFetchNotes = async () => {
@@ -109,6 +140,8 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
     if (inputMethod === 'topic' && !topic.trim()) return;
     if (inputMethod === 'cloud' && !selectedNote) return;
 
+    setIsGenerating(true);
+
     let finalTopicPrompt = topic;
 
     // Logic Construction based on Input Method
@@ -117,24 +150,33 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
        finalTopicPrompt = `Fokus Topik: ${topic}\n\nReferensi Materi:\n${selectedNote.content}`;
     } 
     
-    onStart(
-      inputMethod === 'file' ? file : null, 
-      { 
-        provider, 
-        modelId, 
-        questionCount, 
-        mode, 
-        examStyle, 
-        topic: finalTopicPrompt // This is what gets sent to AI
-      }
-    );
+    // Add small timeout to allow UI update before heavy operation
+    setTimeout(() => {
+        onStart(
+            inputMethod === 'file' ? file : null, 
+            { 
+              provider, 
+              modelId, 
+              questionCount, 
+              mode, 
+              examStyle, 
+              topic: finalTopicPrompt // This is what gets sent to AI
+            }
+          );
+          // Note: We don't set setIsGenerating(false) here because App.tsx 
+          // will either unmount this component (success) or we handle error catch there.
+          // But to be safe in case of sync error:
+          setTimeout(() => setIsGenerating(false), 2000); 
+    }, 100);
   };
 
   // Check if ready to start
   const isReady = 
+    !isUploading && (
     (inputMethod === 'file' && file) || 
     (inputMethod === 'topic' && topic.trim().length > 3) || 
-    (inputMethod === 'cloud' && selectedNote && topic.trim().length > 0);
+    (inputMethod === 'cloud' && selectedNote && topic.trim().length > 0)
+    );
 
   const modes = [
     { id: QuizMode.STANDARD, label: 'Standard', icon: <Layout size={20} />, info: "Santai, tanpa timer." },
@@ -214,20 +256,77 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
         {/* INPUT AREA */}
         <div className="mb-8">
           
-          {/* 1. FILE INPUT */}
+          {/* 1. FILE INPUT WITH LOADING VISUALIZATION */}
           {inputMethod === 'file' && (
             <motion.div 
               initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-              className={`relative group cursor-pointer h-40 border-2 border-dashed rounded-3xl transition-all flex flex-col items-center justify-center text-center ${dragActive ? 'border-theme-primary bg-theme-primary/10' : file ? 'border-emerald-400/50 bg-emerald-500/10' : 'border-theme-border hover:border-theme-primary hover:bg-theme-bg/20'}`}
+              className={`relative group h-40 border-2 border-dashed rounded-3xl transition-all flex flex-col items-center justify-center text-center overflow-hidden
+                ${dragActive ? 'border-theme-primary bg-theme-primary/10' : file ? 'border-emerald-400/50 bg-emerald-500/5' : 'border-theme-border hover:border-theme-primary hover:bg-theme-bg/20'}
+                ${!isUploading && !file ? 'cursor-pointer' : ''}
+              `}
               onDragEnter={handleDrag} onDragLeave={handleDrag} onDragOver={handleDrag} onDrop={handleDrop}
-              onClick={() => document.getElementById('file-upload')?.click()}
+              onClick={() => { if(!isUploading && !file) document.getElementById('file-upload')?.click() }}
             >
-              <input id="file-upload" type="file" className="hidden" accept=".pdf,.md,.txt,.ppt,.pptx" onChange={handleChangeFile} />
-              {file ? (
-                <div className="flex items-center space-x-3 font-medium"><FileText size={28} className="text-emerald-500" /><span>{file.name}</span></div>
-              ) : (
-                <div className="text-theme-muted"><Upload size={32} className="mx-auto mb-2 opacity-50" /><p className="text-sm">Drag & drop materi pelajaran</p></div>
-              )}
+              <input id="file-upload" type="file" className="hidden" accept=".pdf,.md,.txt,.ppt,.pptx" onChange={handleChangeFile} disabled={isUploading} />
+              
+              <AnimatePresence mode='wait'>
+                  {isUploading ? (
+                     <motion.div 
+                       key="uploading"
+                       initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
+                       className="w-full h-full flex flex-col items-center justify-center relative"
+                     >
+                        <RefreshCw size={32} className="text-theme-primary animate-spin mb-3" />
+                        <div className="w-1/2 h-2 bg-theme-bg/50 rounded-full overflow-hidden">
+                           <motion.div 
+                             className="h-full bg-theme-primary"
+                             initial={{ width: 0 }}
+                             animate={{ width: `${uploadProgress}%` }}
+                           />
+                        </div>
+                        <p className="text-xs font-bold text-theme-primary mt-2 uppercase tracking-widest">
+                            Memindai Materi ({uploadProgress}%)
+                        </p>
+                     </motion.div>
+                  ) : file ? (
+                     <motion.div 
+                        key="file-ready"
+                        initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                        className="flex flex-col items-center relative w-full h-full justify-center"
+                     >
+                        <div className="bg-white p-3 rounded-2xl shadow-sm mb-2 relative">
+                            <FileText size={32} className="text-emerald-500" />
+                            <div className="absolute -top-1 -right-1 bg-emerald-500 text-white rounded-full p-0.5 border-2 border-white">
+                                <CheckCircle2 size={12} />
+                            </div>
+                        </div>
+                        <span className="font-bold text-lg text-theme-text mb-1">{file.name}</span>
+                        <div className="flex items-center space-x-1 text-emerald-600 text-xs font-bold bg-emerald-100 px-2 py-1 rounded-full">
+                           <CheckCircle2 size={10} /> <span>Siap Diproses</span>
+                        </div>
+                        
+                        {/* Change File Button */}
+                        <button 
+                           onClick={handleRemoveFile}
+                           className="absolute top-3 right-3 p-2 bg-white/50 hover:bg-rose-100 text-theme-muted hover:text-rose-500 rounded-full transition-colors"
+                           title="Ganti File"
+                        >
+                            <X size={18} />
+                        </button>
+                     </motion.div>
+                  ) : (
+                     <motion.div 
+                       key="empty"
+                       initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                       className="text-theme-muted"
+                     >
+                       <Upload size={32} className="mx-auto mb-2 opacity-50" />
+                       <p className="text-sm font-medium hidden md:block">Drag & drop materi pelajaran</p>
+                       <p className="text-sm font-medium md:hidden">Tap untuk Upload Materi</p>
+                       <p className="text-xs opacity-50 mt-1">PDF, TXT, MD Supported</p>
+                     </motion.div>
+                  )}
+              </AnimatePresence>
             </motion.div>
           )}
 
@@ -366,7 +465,7 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
            </div>
         </div>
 
-        <GlassButton fullWidth onClick={handleStart} disabled={!isReady}>
+        <GlassButton fullWidth onClick={handleStart} disabled={!isReady || isGenerating} isLoading={isGenerating}>
           {inputMethod === 'file' ? 'Analisis Dokumen & Buat Soal' : inputMethod === 'topic' ? 'Generate Soal dari Topik' : 'Generate Soal dari Catatan'}
         </GlassButton>
 

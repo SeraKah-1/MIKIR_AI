@@ -1,165 +1,130 @@
 
 /**
  * ==========================================
- * GROQ CLOUD SERVICE (BATCHED & OPTIMIZED)
+ * GROQ CLOUD SERVICE (ROBUST & SLICED)
  * ==========================================
+ * Perbaikan:
+ * 1. Document Slicing: Dokumen dipecah per batch agar hemat token & anti-429.
+ * 2. Defensive Parsing: Menangani JSON yang tidak sempurna (missing text field).
+ * 3. Adaptive Backoff: Menangani Rate Limit dengan jeda waktu dinamis.
  */
 
 import { Question, QuizMode, ExamStyle } from "../types";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
-const BATCH_SIZE = 10; // Groq is fast but context window for output is sensitive. Smaller batches = safer JSON.
+const BATCH_SIZE = 5; 
+const MAX_RETRIES = 3; 
 
-// Helper to clean JSON string aggressively
-const cleanJSON = (text: string) => {
-  // 1. Remove markdown code blocks
-  let cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
+// --- ROBUST PARSING ---
+const extractAndParseJSON = (text: string): any[] => {
+  // Bersihkan markdown code blocks
+  let cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
   
-  // 2. Scan for the first '[' or '{' to ignore intro text
-  const firstSquare = cleaned.indexOf('[');
-  const firstCurly = cleaned.indexOf('{');
+  // Cari array bracket terluar
+  const start = cleaned.indexOf('[');
+  const end = cleaned.lastIndexOf(']');
   
-  // Logic: find which comes first, assuming one exists
-  let startIndex = -1;
-  if (firstSquare !== -1 && firstCurly !== -1) {
-    startIndex = Math.min(firstSquare, firstCurly);
-  } else if (firstSquare !== -1) {
-    startIndex = firstSquare;
-  } else if (firstCurly !== -1) {
-    startIndex = firstCurly;
+  if (start === -1 || end === -1) {
+     // Fallback: Coba cari pattern object satu per satu jika array gagal
+     if (cleaned.trim().startsWith('{')) {
+        try { return [JSON.parse(cleaned)]; } catch(e) {}
+     }
+     return [];
   }
 
-  // If found start, slice from there
-  if (startIndex !== -1) {
-    cleaned = cleaned.substring(startIndex);
-  }
-
-  // 3. Scan for the last ']' or '}'
-  const lastSquare = cleaned.lastIndexOf(']');
-  const lastCurly = cleaned.lastIndexOf('}');
+  cleaned = cleaned.substring(start, end + 1);
   
-  let endIndex = -1;
-  if (lastSquare !== -1 && lastCurly !== -1) {
-    endIndex = Math.max(lastSquare, lastCurly);
-  } else if (lastSquare !== -1) {
-    endIndex = lastSquare;
-  } else if (lastCurly !== -1) {
-    endIndex = lastCurly;
+  try {
+    return JSON.parse(cleaned);
+  } catch (e) {
+    // Attempt fix trailing comma (Error umum Llama 3)
+    try { return JSON.parse(cleaned.replace(/,\s*]/, ']')); } catch (e2) { return []; }
   }
-
-  if (endIndex !== -1) {
-    cleaned = cleaned.substring(0, endIndex + 1);
-  }
-  
-  return cleaned;
 };
 
-// Helper to extract text from PDF using pdf.js
+// --- FILE EXTRACTION ---
 const extractPdfText = async (file: File): Promise<string> => {
   try {
     // @ts-ignore
     const pdfjs = window.pdfjsLib;
-    if (!pdfjs) throw new Error("PDF Library not loaded.");
+    
+    // Compatibility Check: Ensure library is loaded
+    if (!pdfjs) {
+        throw new Error("PDF Library belum siap. Coba refresh halaman.");
+    }
 
-    pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
+    // Set worker explicitly to match the main library version to avoid version mismatch errors
+    if (!pdfjs.GlobalWorkerOptions.workerSrc) {
+        pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
+    }
 
     const arrayBuffer = await file.arrayBuffer();
     const loadingTask = pdfjs.getDocument({ data: arrayBuffer });
     const pdf = await loadingTask.promise;
     
     let fullText = "";
-    const maxPages = Math.min(pdf.numPages, 15); // Increased page limit slightly
+    // Limit to 15 pages to prevent crashing Mobile Browsers (Memory constraints)
+    const maxPages = Math.min(pdf.numPages, 15); 
 
     for (let i = 1; i <= maxPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
       const pageText = textContent.items.map((item: any) => item.str).join(" ");
-      fullText += `--- Page ${i} ---\n${pageText}\n\n`;
+      fullText += `[Page ${i}] ${pageText}\n`;
     }
-
-    if (pdf.numPages > maxPages) {
-      fullText += `\n... (Truncated. Analyzed first ${maxPages} of ${pdf.numPages} pages)`;
-    }
-
     return fullText;
   } catch (error: any) {
-    console.error("PDF Parse Error:", error);
-    throw new Error("Gagal membaca file PDF. Pastikan file tidak terkunci password.");
+    throw new Error("Gagal baca PDF: " + error.message);
   }
 };
 
 const processFileContent = async (file: File): Promise<string> => {
-  const fileType = file.type;
-  const fileName = file.name.toLowerCase();
-
-  if (fileType === "application/pdf" || fileName.endsWith('.pdf')) {
+  if (file.type === "application/pdf" || file.name.endsWith('.pdf')) {
     return await extractPdfText(file);
   }
-  
-  if (
-    fileType.startsWith('text/') || 
-    fileName.endsWith('.txt') || 
-    fileName.endsWith('.md') || 
-    fileName.endsWith('.csv') ||
-    fileName.endsWith('.json')
-  ) {
-    return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
       const reader = new FileReader();
       reader.onload = (e) => resolve(e.target?.result as string);
-      reader.onerror = (e) => reject(new Error("Gagal membaca file text."));
       reader.readAsText(file);
-    });
-  }
-
-  throw new Error(`Groq hanya mendukung PDF dan Text. File ${fileName} tidak didukung.`);
+  });
 };
 
-const sanitizeQuestion = (q: any): Omit<Question, 'id'> => {
-  let options = q.options || [];
+const sanitizeQuestion = (q: any): Question | null => {
+  // 1. Defensive Check: Pastikan ada teks soal
+  const qText = q.text || q.question || q.soal; 
+  if (!qText || typeof qText !== 'string' || qText.length < 5) return null;
 
-  if (typeof options === 'string') {
-    options = options.split(',').map((o: string) => o.trim());
-  } else if (Array.isArray(options)) {
-    options = options.map((o: any) => {
-      if (typeof o === 'object' && o !== null) {
-        return o.text || o.value || o.label || JSON.stringify(o);
-      }
-      return String(o);
-    });
-  } else {
-    options = ["Option A", "Option B", "Option C", "Option D"];
+  // 2. Defensive Check: Options
+  let options = Array.isArray(q.options) ? q.options : (q.choices || []);
+  if (options.length < 2) return null;
+  
+  // Normalisasi Options
+  options = options.map(String).slice(0, 4);
+  while(options.length < 4) options.push("-");
+  
+  // 3. Handle Correct Index
+  let correctIndex = 0;
+  if (typeof q.correctIndex === 'number') correctIndex = q.correctIndex;
+  else if (typeof q.answer === 'string') {
+     const map: Record<string, number> = { 'A': 0, 'a': 0, 'B': 1, 'b': 1, 'C': 2, 'c': 2, 'D': 3, 'd': 3 };
+     correctIndex = map[q.answer] || 0;
   }
 
-  while (options.length < 4) options.push(`Option ${options.length + 1}`);
-  options = options.slice(0, 4);
-
-  let correctIndex = Number(q.correctIndex);
-  if (isNaN(correctIndex)) {
-     if (typeof q.correctIndex === 'string' && q.correctIndex.length === 1) {
-        const charCode = q.correctIndex.toUpperCase().charCodeAt(0);
-        if (charCode >= 65 && charCode <= 68) correctIndex = charCode - 65; 
-     } else {
-        correctIndex = 0; 
-     }
-  }
-  if (correctIndex >= 4) correctIndex = 0;
-  if (correctIndex < 0) correctIndex = 0;
-
-  // --- SHUFFLE LOGIC (NEW) ---
+  // Shuffle Options agar jawaban tidak selalu A
   const correctContent = options[correctIndex];
   for (let i = options.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [options[i], options[j]] = [options[j], options[i]];
   }
-  const newCorrectIndex = options.indexOf(correctContent);
-
+  
   return {
-    text: String(q.text || "Pertanyaan kosong (Error AI)"),
+    id: 0, // Placeholder
+    text: qText,
     options: options,
-    correctIndex: newCorrectIndex !== -1 ? newCorrectIndex : 0,
-    explanation: String(q.explanation || "Tidak ada penjelasan."),
-    keyPoint: String(q.keyPoint || "Topik Umum"),
-    difficulty: (["Easy", "Medium", "Hard"].includes(q.difficulty) ? q.difficulty : "Medium") as any
+    correctIndex: options.indexOf(correctContent),
+    explanation: q.explanation || q.pembahasan || "Tidak ada pembahasan detail.",
+    keyPoint: q.keyPoint || q.topik || "Umum",
+    difficulty: "Medium"
   };
 };
 
@@ -172,154 +137,137 @@ export const generateQuizGroq = async (
   mode: QuizMode,
   examStyle: ExamStyle,
   onProgress: (status: string) => void,
-  existingQuestionsContext: string[] = [] // NEW: For "Add Questions" feature
+  existingQuestionsContext: string[] = [] 
 ): Promise<{ questions: Question[], contextText: string }> => {
 
-  if (!apiKey) throw new Error("Groq API Key belum diatur.");
+  if (!apiKey) throw new Error("API Key Groq kosong.");
 
-  // 1. Prepare Content
-  let userContent = "";
-  let extractedText = "";
-
+  // 1. Prepare Content 
+  let contextMaterial = "";
   if (file) {
-    onProgress("Mengekstrak teks dari file...");
-    extractedText = await processFileContent(file);
-    const safeText = extractedText.substring(0, 25000); // Safe token limit
-    userContent = `SOURCE MATERIAL:\n${safeText}\n\n`;
-  } else if (topic) {
-    userContent = `TOPIC: "${topic}".\n`;
-    extractedText = topic;
+    onProgress("Membaca dokumen...");
+    const rawText = await processFileContent(file);
+    contextMaterial = rawText.substring(0, 30000); // Limit karakter lebih tinggi karena slicing
   } else {
-    throw new Error("File or Topic required.");
+    contextMaterial = topic || "";
   }
 
-  // 2. Prepare Style Prompt (Enhanced)
-  let styleInstruction = "";
-  switch (examStyle) {
-    case ExamStyle.CONCEPTUAL: 
-      styleInstruction = "STYLE: ESSENTIALIST. Questions must be concise. Focus on underlying principles (Why/How)."; 
-      break;
-    case ExamStyle.ANALYTICAL: 
-      styleInstruction = "STYLE: LOGIC PUZZLE. Connect concepts. Inferred answers only."; 
-      break;
-    case ExamStyle.CASE_STUDY: 
-      styleInstruction = "STYLE: SCENARIO. Brief real world application situation."; 
-      break;
-    case ExamStyle.COMPETITIVE: 
-      styleInstruction = "STYLE: OLYMPIAD. High difficulty, tricky distractors."; 
-      break;
-  }
-
-  // Duplicate Prevention Prompt
-  let avoidPrompt = "";
-  if (existingQuestionsContext.length > 0) {
-    // We only pass the last 20 questions titles to save tokens, usually enough to give context
-    const snippet = existingQuestionsContext.slice(-20).join("; ");
-    avoidPrompt = `IGNORE these existing questions: [${snippet}]. Generate BRAND NEW content.`;
-  }
-
-  const systemPrompt = `
-    You are a Smart Professor.
-    
-    RULES:
-    1. STRICT JSON OUTPUT: Return ONLY a JSON Array. No markdown formatting.
-    2. LANGUAGE: Indonesian (Bahasa Indonesia).
-    3. SOURCE TRUTH: Use ONLY the provided Source Material.
-    4. QUALITY: Avoid repetitive patterns. Ensure options are plausible.
-    5. DIFFICULTY: ${mode === QuizMode.SURVIVAL ? "Hard/Very Hard" : "Mixed difficulty"}.
-    ${styleInstruction}
-    ${avoidPrompt}
-
-    EXPLANATION RULES (STRICT):
-    - KEEP IT SHORT: Maximum 40 words.
-    - NO FILLER: NEVER use "Teks menyatakan", "Dokumen menyebutkan", "Jawaban benar adalah".
-    - BE DIRECT: Explain the *scientific mechanism* or *logic* immediately.
-    - EXAMPLE: instead of "Text says X", say "X occurs because Y triggers Z."
-
-    JSON FORMAT:
-    [
-      {
-        "text": "Question...",
-        "options": ["A","B","C","D"],
-        "correctIndex": 0,
-        "explanation": "Concise scientific reasoning.",
-        "keyPoint": "Specific Concept",
-        "difficulty": "Medium"
-      }
-    ]
-  `;
-
-  // 3. Batch Processing Logic
+  // 2. Setup Batches
   const totalBatches = Math.ceil(questionCount / BATCH_SIZE);
-  let allQuestions: any[] = [];
+  let allRawQuestions: any[] = [];
   
-  // We process sequentially to maintain context logic if needed, but parallel is faster.
-  // For Groq (Rate Limits), sequential or small parallel is better. Let's do sequential for safety.
-  
+  // Hitung ukuran potongan teks per batch
+  const chunkSize = Math.ceil(contextMaterial.length / totalBatches);
+
   for (let i = 0; i < totalBatches; i++) {
-    const currentBatchSize = (i === totalBatches - 1) 
-      ? questionCount - (i * BATCH_SIZE) 
-      : BATCH_SIZE;
+    const batchNum = i + 1;
+    const needed = Math.min(BATCH_SIZE, questionCount - allRawQuestions.length);
+    if (needed <= 0) break;
 
-    onProgress(`Groq: Mengenerate Batch ${i + 1}/${totalBatches}...`);
+    // --- DOCUMENT SLICING ---
+    const startIdx = i * chunkSize;
+    const endIdx = Math.min((i + 1) * chunkSize, contextMaterial.length);
+    // Overlap context sedikit (500 chars) agar tidak putus di tengah kalimat
+    const batchContext = contextMaterial.substring(Math.max(0, startIdx - 500), endIdx);
 
-    try {
+    let success = false;
+    let attempts = 0;
+
+    while (!success && attempts < MAX_RETRIES) {
+      attempts++;
+      onProgress(`Groq: Membuat Paket Soal ${batchNum}/${totalBatches} (Percobaan ${attempts})...`);
+
+      const prompt = `
+        CONTEXT:
+        """${batchContext}"""
+
+        TASK:
+        Create ${needed} multiple-choice questions in INDONESIAN based on the context above.
+        Difficulty: ${examStyle}
+
+        CRITICAL JSON FORMAT:
+        [
+          {
+            "text": "Pertanyaan disini?",
+            "options": ["Pilihan A", "Pilihan B", "Pilihan C", "Pilihan D"],
+            "correctIndex": 0,
+            "explanation": "Penjelasan singkat.",
+            "keyPoint": "Topik Singkat"
+          }
+        ]
+
+        RETURN ONLY RAW JSON. NO MARKDOWN.
+      `;
+
+      try {
         const response = await fetch(GROQ_API_URL, {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${apiKey}`,
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-              messages: [
-                { role: "system", content: systemPrompt },
-                { 
-                    role: "user", 
-                    content: userContent + `\n\nTask: Generate batch ${i+1} of ${totalBatches}. Create exactly ${currentBatchSize} unique questions.` 
-                }
-              ],
-              model: modelId,
-              temperature: 0.4, 
-              max_tokens: 4096 
-            })
-          });
-      
-          if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.error?.message || "Groq API Error");
-          }
-      
-          const data = await response.json();
-          const content = data.choices[0]?.message?.content;
-      
-          if (!content) continue;
-      
-          try {
-            const cleaned = cleanJSON(content);
-            const rawData = JSON.parse(cleaned);
-            
-            let batchQuestions = [];
-            if (Array.isArray(rawData)) batchQuestions = rawData;
-            else if (rawData.questions) batchQuestions = rawData.questions;
-            
-            allQuestions = [...allQuestions, ...batchQuestions];
-            
-          } catch (e) {
-            console.warn(`Batch ${i+1} JSON parse failed`, e);
-          }
+          method: "POST",
+          headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: [
+              { role: "system", content: "You are a quiz generator API. Output JSON only." },
+              { role: "user", content: prompt }
+            ],
+            model: modelId,
+            temperature: 0.5, 
+            stream: false,
+            response_format: { type: "json_object" } 
+          })
+        });
 
-    } catch (err) {
-        console.error(`Batch ${i+1} failed`, err);
-        // Continue to next batch even if one fails
+        // --- HANDLE RATE LIMIT (429) ---
+        if (response.status === 429) {
+           console.warn(`Groq Rate Limit (429) Batch ${batchNum}. Cooling down...`);
+           // Backoff: 5s, 10s, 15s
+           await new Promise(r => setTimeout(r, 5000 * attempts));
+           continue; 
+        }
+
+        if (!response.ok) throw new Error(`Groq API Error: ${response.status}`);
+        
+        const json = await response.json();
+        const content = json.choices[0]?.message?.content;
+        
+        let batchQs = [];
+        try {
+           const parsed = JSON.parse(content);
+           if (Array.isArray(parsed)) batchQs = parsed;
+           else if (parsed.questions) batchQs = parsed.questions;
+           else if (parsed.data) batchQs = parsed.data;
+           else batchQs = [parsed];
+        } catch (e) {
+           batchQs = extractAndParseJSON(content);
+        }
+
+        // VALIDASI HASIL
+        if (batchQs.length > 0) {
+           const validQuestions = batchQs
+              .map(sanitizeQuestion)
+              .filter(q => q !== null);
+           
+           if (validQuestions.length > 0) {
+               allRawQuestions = [...allRawQuestions, ...validQuestions];
+               success = true;
+           } else {
+               throw new Error("JSON valid tapi format soal salah.");
+           }
+        } else {
+            throw new Error("JSON kosong.");
+        }
+
+      } catch (err) {
+        console.warn(`Groq Batch ${batchNum} error:`, err);
+        if (attempts < MAX_RETRIES) await new Promise(r => setTimeout(r, 2000));
+      }
     }
   }
 
-  if (allQuestions.length === 0) throw new Error("Gagal membuat soal. Respon AI tidak valid atau kosong.");
+  if (allRawQuestions.length === 0) throw new Error("Gagal membuat soal. Coba kurangi jumlah soal atau ganti dokumen.");
 
-  const sanitized = allQuestions.map(q => sanitizeQuestion(q));
+  const finalQuestions = allRawQuestions.map((q, idx) => ({
+    ...q,
+    id: idx + 1
+  }));
 
-  return { 
-    questions: sanitized.map((q, i) => ({ ...q, id: i + 1 })), // Re-index locally
-    contextText: extractedText
-  };
+  return { questions: finalQuestions, contextText: contextMaterial };
 };
