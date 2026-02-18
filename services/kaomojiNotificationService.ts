@@ -1,23 +1,28 @@
 
 /**
  * ==========================================
- * KAOMOJI NOTIFICATION SERVICE ( •_•)
+ * KAOMOJI NOTIFICATION SERVICE (V2 - KAOMOJI.RU EDITION)
  * ==========================================
- * Layanan notifikasi yang lebih "manusiawi" dan lucu.
+ * Layanan notifikasi yang lebih "manusiawi", lucu, dan ekspresif.
  */
 
 const KAOMOJI = {
-    HAPPY: "( ◕ ‿ ◕ )",
-    CELEBRATE: "ヽ(⌐■_■)ノ♪♬",
-    CONFUSED: "( @ _ @ )",
-    DETERMINED: "( ง •̀ _ •́ )ง",
-    SLEEPY: "( ￣ o ￣ ) zzZ",
-    SHOCKED: "( ⊙ _ ⊙ )",
-    LOVE: "( ♥ ◡ ♥ )",
-    STUDY: "( 📝 _ 📝 )"
+    HAPPY: ["( ◕ ‿ ◕ )", "(｡•̀ᴗ-)✧", "( b ᵔ ▽ ᵔ )b", "ヽ(・∀・)ﾉ"],
+    CELEBRATE: ["(ﾉ◕ヮ◕)ﾉ*:･ﾟ✧", "ヽ(⌐■_■)ノ♪♬", "°˖✧◝(⁰▿⁰)◜✧˖°", "＼(≧▽≦)／"],
+    CONFUSED: ["( @ _ @ )", "(・_・;)", "┐( ˘_˘ )┌", "(O_O;)"],
+    DETERMINED: ["( ง •̀ _ •́ )ง", "ᕙ(  •̀ ᗜ •́  )ᕗ", "(wu_wu)", "୧( ⁼̴̶̤̀ω⁼̴̶̤́ )૭"],
+    SLEEPY: ["( ￣ o ￣ ) zzZ", "(－_－) zzZ", "(ρ_・).。", "(o´Д`o)ﾉ"],
+    SHOCKED: ["( ⊙ _ ⊙ )", "Σ(O_O)", "(;;;*_*)", "щ(゜ロ゜щ)"],
+    LOVE: ["( ♥ ◡ ♥ )", "( ˘ ³˘)♥", "(´ε｀ )♡", "(Zn_n)"],
+    STUDY: ["( 📝 _ 📝 )", "(o_ _)o ⌨", "φ(．．;)", "( .. )φ"],
+    ANGRY: ["( ≧Д≦)", "(fz_z)", "(╬ Ò﹏Ó)", "(ノ°Д°）ノ︵ ┻━┻"]
+};
+
+const getRandomKaomoji = (category: keyof typeof KAOMOJI) => {
+    const list = KAOMOJI[category];
+    return list[Math.floor(Math.random() * list.length)];
 };
   
-// Request permission helper
 export const requestKaomojiPermission = async (): Promise<boolean> => {
     if (!("Notification" in window)) return false;
     
@@ -28,39 +33,32 @@ export const requestKaomojiPermission = async (): Promise<boolean> => {
             return permission === "granted";
         }
     } catch (e) {
-        console.warn("Notification permission request failed (Mobile restriction?)", e);
+        console.warn("Notification permission error:", e);
         return false;
     }
     return false;
 };
 
-// Generic sender with Safe Guard
 const sendKaomojiNotify = (title: string, body: string, tag?: string) => {
-    // 1. Check basic support
     if (!("Notification" in window)) return;
 
-    // 2. Check permission
     if (Notification.permission === "granted") {
         try {
-            // 3. Try ServiceWorker method first (Standard for PWA/Mobile)
+            // Try ServiceWorker first (Mobile Support)
             if ('serviceWorker' in navigator && navigator.serviceWorker.ready) {
                 navigator.serviceWorker.ready.then(registration => {
                     registration.showNotification(title, {
                         body: body,
                         icon: "https://cdn-icons-png.flaticon.com/512/3767/3767084.png",
                         tag: tag,
-                        requireInteraction: false
-                    });
-                }).catch(() => {
-                    // Fallback to Constructor if SW fails
-                    fallbackNotify(title, body, tag);
-                });
+                        vibrate: [200, 100, 200]
+                    } as any);
+                }).catch(() => fallbackNotify(title, body, tag));
             } else {
-                // Fallback to Constructor (Desktop)
                 fallbackNotify(title, body, tag);
             }
         } catch (e) {
-            console.warn("Notification failed to trigger:", e);
+            console.warn("Notification failed:", e);
         }
     }
 };
@@ -70,11 +68,10 @@ const fallbackNotify = (title: string, body: string, tag?: string) => {
         new Notification(title, {
             body: body,
             icon: "https://cdn-icons-png.flaticon.com/512/3767/3767084.png", 
-            tag: tag,
-            requireInteraction: false
+            tag: tag
         });
     } catch (e) {
-        console.warn("new Notification() illegal constructor on this device.");
+        console.warn("Notification constructor failed.");
     }
 }
 
@@ -82,48 +79,40 @@ const fallbackNotify = (title: string, body: string, tag?: string) => {
 
 export const notifyQuizReady = (questionCount: number) => {
     sendKaomojiNotify(
-        `${KAOMOJI.CELEBRATE} Quiz Siap Disantap!`,
-        `${questionCount} soal sudah selesai digenerate. Yuk gas kerjain sekarang sebelum lupa!`,
+        `${getRandomKaomoji('CELEBRATE')} Quiz Siap!`,
+        `${questionCount} soal panas baru saja keluar dari oven AI. Sikat sekarang!`,
         'quiz-ready'
     );
 };
 
 export const notifySupabaseSuccess = () => {
     sendKaomojiNotify(
-        `${KAOMOJI.LOVE} Terhubung ke Cloud!`,
-        `Database Supabase berhasil connect. Riwayat belajarmu sekarang aman tersimpan di awan~`,
+        `${getRandomKaomoji('LOVE')} Awan Terhubung!`,
+        `Database Supabase connect. Data kamu aman, gak bakal ilang ditelan bumi.`,
         'supabase-connect'
     );
 };
 
 export const notifySupabaseError = () => {
     sendKaomojiNotify(
-        `${KAOMOJI.CONFUSED} Koneksi Gagal...`,
-        `Hmm, kunci Supabase-nya kayaknya salah deh. Coba cek URL dan Key-nya lagi ya.`,
+        `${getRandomKaomoji('ANGRY')} Koneksi Putus...`,
+        `Kunci Supabase-nya salah atau server lagi ngambek. Cek setting lagi ya.`,
         'supabase-error'
     );
 };
 
 export const notifyReviewDue = (count: number) => {
     sendKaomojiNotify(
-        `${KAOMOJI.DETERMINED} Waktunya Review!`,
-        `Ada ${count} kartu flashcard yang otakmu hampir lupa. Review 5 menit aja yuk biar nempel terus!`,
+        `${getRandomKaomoji('DETERMINED')} Waktunya Setor Hafalan!`,
+        `Ada ${count} kartu yang otakmu mulai lupa. Review 5 menit biar jadi long-term memory!`,
         'srs-due'
     );
 };
 
 export const notifyStudyReminder = () => {
     sendKaomojiNotify(
-        `${KAOMOJI.STUDY} Alarm Belajar Bunyi!`,
-        `Ingat janji kita? Waktunya mengasah otak sebentar. Jangan skip ya!`,
+        `${getRandomKaomoji('STUDY')} Alarm Belajar!`,
+        `Udah janji kan mau pinter? Yuk login sebentar, kerjain satu quiz aja.`,
         'daily-reminder'
-    );
-};
-
-export const notifyAchievement = (streak: number) => {
-    sendKaomojiNotify(
-        `${KAOMOJI.HAPPY} Streak ${streak} Hari!`,
-        `Gila keren banget! Kamu konsisten belajar ${streak} hari berturut-turut. Pertahankan!`,
-        'achievement'
     );
 };

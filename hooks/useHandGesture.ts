@@ -37,8 +37,6 @@ export const useHandGesture = (
     
     const loadMediaPipe = async () => {
       try {
-        // Dynamic Import from ESM.SH
-        // This avoids the "Unexpected token 'export'" error that happens when injecting module scripts as standard scripts
         const { FilesetResolver, HandLandmarker } = await import("https://esm.sh/@mediapipe/tasks-vision@0.10.17");
 
         const vision = await FilesetResolver.forVisionTasks(
@@ -115,7 +113,6 @@ export const useHandGesture = (
         canvas.height = video.videoHeight;
         
         // --- DRAW ROI BOX (Lower Right) ---
-        // Let's make ROI approx 50% width/height in center-bottom for stability
         const roiX = canvas.width * 0.25;
         const roiY = canvas.height * 0.3;
         const roiW = canvas.width * 0.5;
@@ -137,9 +134,7 @@ export const useHandGesture = (
               const landmarks = results.landmarks[0];
               
               // --- 1. Check ROI ---
-              // Use Wrist (0) and Middle Finger MCP (9) to check if hand is mostly in box
               const wrist = landmarks[0];
-              // Coordinates are normalized 0-1
               const inROI = (wrist.x * canvas.width > roiX) && 
                             (wrist.x * canvas.width < roiX + roiW) &&
                             (wrist.y * canvas.height > roiY);
@@ -165,10 +160,10 @@ export const useHandGesture = (
   // --- 4. GESTURE RECOGNITION MATH ---
   const recognizeGesture = (landmarks: any[]) => {
       // Finger Tips: 4 (Thumb), 8 (Index), 12 (Middle), 16 (Ring), 20 (Pinky)
-      // Finger PIP (Joint): 2, 6, 10, 14, 18
       
       const isFingerUp = (tipIdx: number, pipIdx: number) => {
-         return landmarks[tipIdx].y < landmarks[pipIdx].y; // Y increases downwards
+         // Check TIP against PIP (Joint 2) and MCP (Joint 1) for stability
+         return landmarks[tipIdx].y < landmarks[pipIdx].y; 
       };
 
       const indexUp = isFingerUp(8, 6);
@@ -176,50 +171,51 @@ export const useHandGesture = (
       const ringUp = isFingerUp(16, 14);
       const pinkyUp = isFingerUp(20, 18);
 
-      // Thumb Logic (X-axis check relative to palm direction)
-      // Assuming right hand or mirrored left hand. 
-      // Simple heuristic: Thumb Tip x < Thumb IP x (if palm facing camera)
-      // This is tricky for variable hands. Let's use distance from Index MCP.
-      const thumbTip = landmarks[4];
-      const indexMCP = landmarks[5];
-      const pinkyMCP = landmarks[17];
-      
-      const thumbExtended = Math.abs(thumbTip.x - pinkyMCP.x) > Math.abs(indexMCP.x - pinkyMCP.x); 
-      // Rough approximation: Thumb is further out than Index base
-
       const count = (indexUp?1:0) + (middleUp?1:0) + (ringUp?1:0) + (pinkyUp?1:0);
 
-      // --- LOGIC MAP ---
-      // 5 Fingers -> Stop/Back
-      if (count === 4 && thumbExtended) return "BACK"; 
+      // Thumb Analysis
+      const thumbTip = landmarks[4];
+      const thumbIP = landmarks[3];
+      const thumbMCP = landmarks[2];
+      const pinkyMCP = landmarks[17];
       
-      // Thumbs Up (Fist + Thumb)
-      if (count === 0 && thumbExtended) return "NEXT";
+      // Thumb Up: Tip is significantly higher than MCP
+      const isThumbUp = thumbTip.y < thumbMCP.y; 
+      
+      // --- LOGIC MAP ---
+
+      // "BACK" (Open Palm): 
+      // 4 Fingers UP + Thumb Extended/Up (Count is 4 fingers excluding thumb)
+      if (count === 4 && isThumbUp) return "BACK";
+
+      // "NEXT" (Thumbs Up):
+      // Fingers curled (count <= 1) AND Thumb pointing UP.
+      if (count <= 1 && isThumbUp) return "NEXT";
 
       // Numbers
       if (count === 1 && indexUp) return "1";
       if (count === 2 && indexUp && middleUp) return "2";
       if (count === 3 && indexUp && middleUp && ringUp) return "3";
-      if (count === 4) return "4";
-
+      // "4": 4 Fingers UP + Thumb Tucked
+      if (count === 4 && !isThumbUp) return "4";
+      
       return null;
   };
 
   // --- 5. DWELL TIME LOGIC ---
   const handleDwellTime = (gesture: string | null) => {
      const now = performance.now();
+     const DWELL_DURATION = 800; // Reduced from 1200ms to make input feel responsive
      
-     // Filter noisy flickering
      if (gesture === lastGestureRef.current) {
         const duration = now - gestureStartTimeRef.current;
-        const progress = Math.min(100, (duration / 1500) * 100); // 1.5s dwell
+        const progress = Math.min(100, (duration / DWELL_DURATION) * 100); 
         
         setState(prev => ({ ...prev, detectedGesture: gesture, dwellProgress: progress }));
 
-        if (duration > 1500 && !hasTriggeredRef.current && gesture) {
+        if (duration > DWELL_DURATION && !hasTriggeredRef.current && gesture) {
            onTrigger(gesture);
            hasTriggeredRef.current = true;
-           // Haptic feedback if available (via browser)
            if (navigator.vibrate) navigator.vibrate(50);
         }
      } else {
@@ -242,7 +238,6 @@ export const useHandGesture = (
       ctx.strokeStyle = color;
       ctx.lineWidth = 2;
 
-      // Draw points
       for (const point of landmarks) {
           const x = point.x * ctx.canvas.width;
           const y = point.y * ctx.canvas.height;
@@ -251,13 +246,12 @@ export const useHandGesture = (
           ctx.fill();
       }
 
-      // Draw connections (Simple subset)
       const connections = [
-          [0, 1], [1, 2], [2, 3], [3, 4], // Thumb
-          [0, 5], [5, 6], [6, 7], [7, 8], // Index
-          [0, 9], [9, 10], [10, 11], [11, 12], // Middle
-          [0, 13], [13, 14], [14, 15], [15, 16], // Ring
-          [0, 17], [17, 18], [18, 19], [19, 20] // Pinky
+          [0, 1], [1, 2], [2, 3], [3, 4], 
+          [0, 5], [5, 6], [6, 7], [7, 8], 
+          [0, 9], [9, 10], [10, 11], [11, 12], 
+          [0, 13], [13, 14], [14, 15], [15, 16], 
+          [0, 17], [17, 18], [18, 19], [19, 20] 
       ];
 
       for (const [start, end] of connections) {

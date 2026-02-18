@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Sparkles, Star, Heart, Zap, Music, Cloud, Coffee } from 'lucide-react';
@@ -63,6 +64,20 @@ const CHIBI_STATES = [
     shadow: "shadow-orange-400/30",
     message: "Mode beruang pintar aktif.",
     scale: 1.05
+  },
+  {
+    face: "( ¬ ‿ ¬ )", // Smug
+    color: "from-lime-200 to-green-200",
+    shadow: "shadow-lime-500/30",
+    message: "Gampang ini mah (sombong dikit).",
+    scale: 1
+  },
+  {
+    face: "( x _ x )", // Dizzy
+    color: "from-rose-200 to-pink-200",
+    shadow: "shadow-rose-500/30",
+    message: "Overheat... butuh kipas angin.",
+    scale: 0.9
   }
 ];
 

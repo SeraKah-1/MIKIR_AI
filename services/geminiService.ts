@@ -1,27 +1,22 @@
 
 /**
  * ==========================================
- * GEMINI AI SERVICE (ONE-SHOT SPEED MODE)
+ * GEMINI AI SERVICE (STRICT MODE + RAG)
  * ==========================================
- * Strategi: Tembak sekali (One-Shot). 
- * Gemini 1.5 Flash/Pro kuat menampung konteks besar dan output panjang.
- * Ini memangkas waktu tunggu HTTP request berulang.
  */
 
 import { GoogleGenAI } from "@google/genai";
 import { Question, QuizMode, ExamStyle } from "../types";
 
-// Helper to convert file to base64
 const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: string; mimeType: string } } | { text: string }> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    
-    if (file.type === "text/markdown" || file.type === "text/plain" || file.name.endsWith('.md')) {
-      reader.onloadend = () => {
-        resolve({ text: reader.result as string });
-      };
+    // Simple text files
+    if (file.type === "text/markdown" || file.type === "text/plain" || file.name.endsWith('.md') || file.name.endsWith('.txt')) {
+      reader.onloadend = () => resolve({ text: reader.result as string });
       reader.readAsText(file);
     } else {
+      // PDF / Images
       reader.onloadend = () => {
         const base64Data = (reader.result as string).split(',')[1];
         resolve({
@@ -37,250 +32,164 @@ const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: s
   });
 };
 
-// --- ULTRA ROBUST JSON PARSER ---
-// Membersihkan segala macam sampah yang mungkin dikirim LLM sebelum/sesudah JSON
 const cleanAndParseJSON = (rawText: string): any[] => {
-  let text = rawText;
-  
-  // 1. Hapus Markdown Code Blocks
-  text = text.replace(/```json/gi, "").replace(/```/g, "").trim();
-
-  // 2. Cari kurung siku terluar [ ... ]
+  let text = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
   const firstOpen = text.indexOf('[');
   const lastClose = text.lastIndexOf(']');
 
-  if (firstOpen === -1 || lastClose === -1) {
-     throw new Error("Format JSON tidak valid (Tidak ada Array).");
-  }
-
-  // 3. Ambil isinya saja
+  if (firstOpen === -1 || lastClose === -1) throw new Error("Format JSON invalid.");
   const jsonContent = text.substring(firstOpen, lastClose + 1);
 
   try {
     return JSON.parse(jsonContent);
   } catch (e) {
-    // 4. Emergency Fix: Common AI Error where it misses a comma between objects
-    // Pattern: } {  --> }, {
-    // Pattern: } \n { --> }, {
-    try {
-        const patched = jsonContent.replace(/}\s*{/g, "},{");
-        return JSON.parse(patched);
-    } catch (e2) {
-        console.error("JSON Critical Fail:", rawText);
-        throw new Error("Gagal memproses data soal (JSON Syntax Error).");
-    }
+    // Retry with simple fix for common trailing comma issues
+    try { return JSON.parse(jsonContent.replace(/,\s*]/, ']')); } catch (e2) {}
+    throw new Error("Gagal parsing output AI.");
   }
 };
 
 const sanitizeQuestion = (q: any): Omit<Question, 'id'> => {
-  // Pastikan Options ada 4
   let options = Array.isArray(q.options) ? q.options : ["A", "B", "C", "D"];
-  // Konversi ke string jika ada object aneh
-  options = options.map((o: any) => (typeof o === 'object' ? JSON.stringify(o) : String(o)));
-  
+  options = options.map((o: any) => String(o)).slice(0, 4);
   while (options.length < 4) options.push(`Opsi ${options.length + 1}`);
-  options = options.slice(0, 4);
 
-  // Pastikan Correct Index Valid
   let correctIndex = Number(q.correctIndex);
   if (isNaN(correctIndex) || correctIndex < 0 || correctIndex > 3) correctIndex = 0;
 
-  // --- SHUFFLE OPTIONS (Agar kunci jawaban tidak selalu A) ---
-  // AI sering bias ke jawaban A. Kita acak di sini.
+  // Shuffle options
   const correctAnswerText = options[correctIndex];
-  // Algoritma Fisher-Yates Shuffle sederhana untuk array options
   for (let i = options.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [options[i], options[j]] = [options[j], options[i]];
   }
-  // Cari index baru dari jawaban yang benar
   const newCorrectIndex = options.indexOf(correctAnswerText);
 
   return {
     text: String(q.text || "Soal Kosong"),
     options: options,
     correctIndex: newCorrectIndex,
-    explanation: String(q.explanation || "Tidak ada pembahasan."),
-    keyPoint: String(q.keyPoint || "Umum"),
-    difficulty: (["Easy", "Medium", "Hard"].includes(q.difficulty) ? q.difficulty : "Medium") as any
+    explanation: String(q.explanation || "Pembahasan tidak tersedia."),
+    keyPoint: String(q.keyPoint || "Umum").substring(0, 20),
+    difficulty: "Medium"
   };
 };
 
-// --- MAIN ONE-SHOT FUNCTION ---
 export const generateQuiz = async (
   apiKey: string, 
-  file: File | null, 
+  files: File[] | File | null, 
   topic: string | undefined, 
   modelId: string,
   questionCount: number,
   mode: QuizMode,
   examStyle: ExamStyle = ExamStyle.CONCEPTUAL,
   onProgress: (status: string) => void,
-  existingQuestionsContext: string[] = [] // Support untuk "Add More"
+  existingQuestionsContext: string[] = [],
+  customPrompt: string = "",
+  libraryContext: string = "" // NEW: Text content from Library
 ): Promise<{ questions: Question[], contextText: string }> => {
   
   if (!apiKey) throw new Error("API Key Gemini belum diatur.");
-
   const ai = new GoogleGenAI({ apiKey: apiKey });
   
-  // 1. Prepare Content
   const parts: any[] = [];
   let contextText = ""; 
 
-  if (file) {
-    onProgress("Membaca & Mengompres Dokumen...");
-    const filePart = await fileToGenerativePart(file);
-    parts.push(filePart);
-    if ('text' in filePart) contextText = filePart.text;
-    else contextText = `[File: ${file.name}]`; 
-  } else if (topic) {
-    onProgress("Menganalisis Topik...");
-    contextText = topic;
+  // 1. Handle Library Context (Text Based)
+  if (libraryContext) {
+     onProgress("Memuat Library Materi...");
+     parts.push({ text: `REFERENCE MATERIAL:\n${libraryContext.substring(0, 500000)}` }); // Limit to safe token count
+     contextText = "[Library Source]";
   }
 
-  // 2. CONSTRUCT THE ULTIMATE PROMPT
-  // Kita minta sekaligus semua soal. Gemini kuat menahan ribuan token output.
+  // 2. Handle File Uploads (Binary/Text)
+  const fileArray = Array.isArray(files) ? files : (files ? [files] : []);
+  if (fileArray.length > 0) {
+    onProgress(`Memproses ${fileArray.length} File Tambahan...`);
+    for (const file of fileArray) {
+       const filePart = await fileToGenerativePart(file);
+       parts.push(filePart);
+    }
+    contextText += ` [Files: ${fileArray.map(f => f.name).join(', ')}]`; 
+  } 
   
-  let styleInstruction = "";
-  switch (examStyle) {
-    case ExamStyle.COMPETITIVE: styleInstruction = "HARD DIFFICULTY. Tricky distractors. UTBK/Olimpiade Level."; break;
-    case ExamStyle.ANALYTICAL: styleInstruction = "Focus on CAUSE-AND-EFFECT relationships and logic."; break;
-    case ExamStyle.CASE_STUDY: styleInstruction = "Use short real-world SCENARIOS/CASES as the question stem."; break;
-    default: styleInstruction = "Academic Standard. Balanced difficulty."; break;
+  // 3. Topic Focus
+  if (topic) {
+    parts.push({ text: `IMPORTANT: FOCUS ONLY ON THIS TOPIC: "${topic}". Ignore unrelated parts of the reference material.` });
   }
 
-  // Anti-Duplicate Strategy for "Add More" feature
   let avoidancePrompt = "";
   if (existingQuestionsContext.length > 0) {
-      // Ambil kata kunci dari soal-soal sebelumnya (jangan kirim full text biar hemat token)
-      const prevTopics = existingQuestionsContext
-        .map(q => q.substring(0, 30))
-        .filter((v, i, a) => a.indexOf(v) === i) // Unique
-        .slice(-30) // Ambil 30 terakhir
-        .join(", ");
-        
-      avoidancePrompt = `IMPORTANT: DO NOT create questions about these specific concepts again: [${prevTopics}]. Find NEW angles or details.`;
+      const prevTopics = existingQuestionsContext.map(q => q.substring(0, 20)).slice(-20).join(", ");
+      avoidancePrompt = `DO NOT repeat these questions: [${prevTopics}].`;
   }
 
   const finalPrompt = `
-    ROLE: Expert Exam Creator.
-    TASK: Generate EXACTLY ${questionCount} multiple-choice questions based on the attached input.
-    LANGUAGE: INDONESIAN (Formal, Academic).
-    STYLE: ${styleInstruction}
-    ${avoidancePrompt}
+    ROLE: Strict Academic Examiner.
+    TASK: Create EXACTLY ${questionCount} multiple-choice questions in INDONESIAN.
+    
+    STRICT RULES (ANTI-HALLUCINATION):
+    1. USE ONLY the Reference Material provided above. If the answer is not in the material, do not invent it.
+    2. FOCUS strictly on the Topic: "${topic || 'General'}".
+    3. IF MATERIAL IS EMPTY/UNREADABLE, return an error JSON with "text": "ERROR: Materi kosong/tidak terbaca".
+    4. NO META QUESTIONS like "What is discussed on page 1?". Ask about the CONCEPTS.
+    5. Difficulty: ${examStyle}.
+    
+    USER CUSTOM INSTRUCTIONS:
+    "${customPrompt}"
 
-    CRITICAL RULES:
-    1. Output MUST be a SINGLE VALID JSON ARRAY.
-    2. Do NOT use Markdown formatting like \`\`\`json. Just raw JSON.
-    3. Ensure 'options' array has exactly 4 items.
-    4. 'correctIndex' must be 0, 1, 2, or 3.
-    5. 'explanation' should be concise (max 2 sentences).
-    6. 'keyPoint' is a 1-3 word tag for the concept being tested.
-
-    JSON STRUCTURE:
+    JSON FORMAT (Array):
     [
       {
-        "text": "Question text here?",
-        "options": ["Option A", "Option B", "Option C", "Option D"],
+        "text": "Question?",
+        "options": ["A", "B", "C", "D"],
         "correctIndex": 0,
-        "explanation": "Why A is correct...",
-        "keyPoint": "Photosynthesis",
+        "explanation": "Why correct...",
+        "keyPoint": "Tag",
         "difficulty": "Medium"
-      },
-      ...
+      }
     ]
+    ${avoidancePrompt}
   `;
 
   parts.push({ text: finalPrompt });
 
-  // 3. EXECUTE ONE-SHOT
-  onProgress(`Meng-generate ${questionCount} soal sekaligus...`);
+  onProgress(`Menyusun ${questionCount} soal berkualitas...`);
   
   try {
       const response = await ai.models.generateContent({
         model: modelId,
         contents: { parts },
         config: { 
-          responseMimeType: "application/json", // Force JSON Mode (Gemini Feature)
-          temperature: 0.4, // Rendah agar patuh format, tapi tidak 0 agar kreatif
-          maxOutputTokens: 8192, // Max out the output buffer
+          responseMimeType: "application/json", 
+          temperature: 0.3, 
+          maxOutputTokens: 8192, 
         }
       });
 
       const responseText = response.text;
-      
-      if (!responseText) throw new Error("AI memberikan respon kosong.");
+      if (!responseText) throw new Error("AI Empty Response");
 
-      onProgress("Finishing & Parsing...");
+      onProgress("Memvalidasi Soal...");
       const rawQuestions = cleanAndParseJSON(responseText);
 
-      if (!Array.isArray(rawQuestions)) throw new Error("AI tidak mengembalikan Array.");
+      if (!Array.isArray(rawQuestions)) throw new Error("Format AI salah (Bukan Array).");
+      if (rawQuestions.length > 0 && rawQuestions[0].text.includes("ERROR:")) throw new Error(rawQuestions[0].text);
 
-      // Sanitize & ID Assignment
       const finalQuestions = rawQuestions.map((q, index) => ({
         ...sanitizeQuestion(q),
         id: index + 1
       }));
 
-      // Validasi jumlah (kadang AI generate kurang/lebih sedikit, kita toleransi)
-      if (finalQuestions.length === 0) throw new Error("Array soal kosong.");
-
       return { questions: finalQuestions, contextText };
 
   } catch (err: any) {
-      console.error("Gemini One-Shot Error:", err);
-      // Fallback message yang lebih jelas
-      if (err.message.includes("400")) throw new Error("Model Overloaded atau File terlalu besar. Coba kurangi jumlah soal.");
+      console.error("Gemini Error:", err);
+      if (err.message.includes("400")) throw new Error("File terlalu besar atau API Error.");
       throw err;
   }
 };
 
-export const chatWithDocument = async (
-  apiKey: string,
-  modelId: string,
-  history: { role: string; parts: { text: string }[] }[],
-  message: string,
-  contextText: string,
-  file: File | null
-): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey });
-  
-  const systemInstruction = `
-    Anda adalah Tutor AI yang cerdas dan to-the-point.
-    Jawab pertanyaan user berdasarkan konteks dokumen yang diberikan.
-    Jika tidak ada di dokumen, gunakan pengetahuan umum tapi beri disclaimer.
-    Bahasa: Indonesia Formal-Santai.
-  `;
-
-  // Construct initial context if creating new chat
-  // Note: Gemini API manages history in the object itself mostly, 
-  // but we pass context in the system instruction or first message for robustness.
-  
-  const parts: any[] = [{ text: message }];
-  
-  // Attach file/context to the VERY FIRST turn implicitly by checking history length
-  // But simpler approach: Send context as a hidden system-like prompt in the chat session init
-  
-  try {
-    const chat = ai.chats.create({
-      model: modelId,
-      config: { systemInstruction },
-      history: history.map(h => ({ role: h.role, parts: h.parts }))
-    });
-    
-    // If there is a file, we should technically add it to history or use generateContent for single turn.
-    // For Chat interface, we assume text context is sufficient for now or handled via system prompt.
-    // Enhanced: If contextText is available, prepend it to the message invisible to user? 
-    // Better: Rely on the fact that 'contextText' is passed.
-    
-    if (contextText && history.length === 0) {
-        // Inject context into the first message content invisibly
-        parts[0].text = `CONTEXT: ${contextText.substring(0, 50000)} \n\n QUESTION: ${message}`;
-    }
-
-    const result = await chat.sendMessage({ parts });
-    return result.text || "Tidak ada respon.";
-  } catch (e) { 
-    return "Maaf, terjadi kesalahan saat menghubungi AI."; 
-  }
+export const chatWithDocument = async (apiKey: string, modelId: string, history: any[], message: string, contextText: string, file: File | null) => {
+  return "Fitur chat sedang dalam perbaikan."; 
 };

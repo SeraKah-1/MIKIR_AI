@@ -7,7 +7,7 @@
  */
 import CryptoJS from 'crypto-js';
 import { KeycardData, AiProvider } from '../types';
-import { saveApiKey, saveStorageConfig } from './storageService';
+import { saveApiKey, saveStorageConfig, saveApiKeysPool } from './storageService';
 
 const KEYCARD_SESSION_KEY = 'mikir_active_keycard';
 
@@ -18,7 +18,7 @@ export const generateKeycard = (
 ): string => {
   const payload: KeycardData = {
     ...data,
-    version: '1.1', // Bump version for new dual-key support
+    version: '1.2', // Bump version for multi-key support
   };
 
   const jsonString = JSON.stringify(payload);
@@ -67,12 +67,22 @@ export const unlockKeycard = (fileContent: string, pin: string): KeycardData => 
 // --- SESSION MANAGEMENT ---
 export const applyKeycardToSession = (data: KeycardData) => {
   // Inject keys if they exist in the card
-  if (data.config.geminiKey) {
-    saveApiKey('gemini', data.config.geminiKey);
+  
+  // 1. GEMINI
+  if (data.config.geminiKeys && data.config.geminiKeys.length > 0) {
+     saveApiKeysPool('gemini', data.config.geminiKeys);
+     // Also save single key for legacy fallback
+     saveApiKey('gemini', data.config.geminiKeys[0]);
+  } else if (data.config.geminiKey) {
+     saveApiKey('gemini', data.config.geminiKey);
   }
   
-  if (data.config.groqKey) {
-    saveApiKey('groq', data.config.groqKey);
+  // 2. GROQ
+  if (data.config.groqKeys && data.config.groqKeys.length > 0) {
+     saveApiKeysPool('groq', data.config.groqKeys);
+     saveApiKey('groq', data.config.groqKeys[0]);
+  } else if (data.config.groqKey) {
+     saveApiKey('groq', data.config.groqKey);
   }
   
   // Handle Legacy cards (v1.0) that had generic 'apiKey' and 'provider'
@@ -106,6 +116,11 @@ export const logoutKeycard = () => {
   // 2. Remove Credentials
   localStorage.removeItem('glassquiz_api_key');
   localStorage.removeItem('glassquiz_groq_key');
+  
+  // Remove Arrays
+  localStorage.removeItem('glassquiz_gemini_keys_pool');
+  localStorage.removeItem('glassquiz_groq_keys_pool');
+  
   localStorage.removeItem('glassquiz_supabase_config');
   
   // 3. Reset Preferences

@@ -1,51 +1,64 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
-import { Upload, FileText, Layout, Zap, TrendingUp, Skull, BookOpen, BrainCircuit, Briefcase, Target, Type, Cpu, Cloud, RefreshCw, Layers, X, Edit3, PlayCircle, CheckCircle2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Upload, FileText, Layout, Zap, TrendingUp, Skull, BookOpen, Type, Cloud, RefreshCw, CheckCircle2, X, PlayCircle, Layers, Settings2, Sparkles, Folder, Target, BrainCircuit, Shuffle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AVAILABLE_MODELS, ModelConfig, QuizMode, ExamStyle, AiProvider, CloudNote, Question } from '../types';
+import { AVAILABLE_MODELS, ModelConfig, QuizMode, ExamStyle, AiProvider, CloudNote, Question, LibraryItem, ModelOption } from '../types';
 import { GlassButton } from './GlassButton';
 import { DashboardMascot } from './DashboardMascot';
 import { StudyScheduler } from './StudyScheduler';
-import { fetchNotesFromSupabase, getSupabaseConfig } from '../services/storageService';
+import { fetchNotesFromSupabase, getLibraryItems, getApiKey } from '../services/storageService';
+import { fetchGroqModels } from '../services/groqService';
 import { getDueItems } from '../services/srsService';
 import { notifyReviewDue } from '../services/kaomojiNotificationService';
 import { FlashcardScreen } from './FlashcardScreen';
 
 interface ConfigScreenProps {
-  onStart: (file: File | null, config: ModelConfig) => void;
+  onStart: (files: File[], config: ModelConfig) => void;
   onContinue: () => void;
   hasActiveSession: boolean;
 }
 
+const MODE_CARDS = [
+  { id: QuizMode.STANDARD, icon: Layout, label: "Standard", desc: "Santai. Tanpa waktu.", color: "bg-indigo-50 border-indigo-200 text-indigo-600" },
+  { id: QuizMode.TIME_RUSH, icon: Zap, label: "Time Rush", desc: "20 detik/soal.", color: "bg-amber-50 border-amber-200 text-amber-600" },
+  { id: QuizMode.SURVIVAL, icon: Skull, label: "Survival", desc: "3 Nyawa.", color: "bg-rose-50 border-rose-200 text-rose-600" }
+];
+
 export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue, hasActiveSession }) => {
-  const [inputMethod, setInputMethod] = useState<'file' | 'topic' | 'cloud'>('file');
-  const [file, setFile] = useState<File | null>(null);
+  const [inputMethod, setInputMethod] = useState<'library' | 'upload' | 'topic'>('library');
   
-  // File Upload Visual States
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
+  // Library State
+  const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
+  const [selectedLibraryIds, setSelectedLibraryIds] = useState<string[]>([]);
   
-  // Topic state is now used for ALL modes as the "Quiz Title/Focus"
+  // Direct Upload State
+  const [files, setFiles] = useState<File[]>([]);
+  
+  // Manual Topic State
   const [topic, setTopic] = useState(''); 
   
-  const [cloudNotes, setCloudNotes] = useState<CloudNote[]>([]);
-  const [selectedNote, setSelectedNote] = useState<CloudNote | null>(null);
-  const [isLoadingNotes, setIsLoadingNotes] = useState(false);
-  
+  // Config State
   const [provider, setProvider] = useState<AiProvider>('gemini');
   const [modelId, setModelId] = useState(AVAILABLE_MODELS[0].id);
+  const [dynamicModels, setDynamicModels] = useState<ModelOption[]>(AVAILABLE_MODELS);
   const [questionCount, setQuestionCount] = useState(10);
   const [mode, setMode] = useState<QuizMode>(QuizMode.STANDARD);
   const [examStyle, setExamStyle] = useState<ExamStyle>(ExamStyle.CONCEPTUAL);
+  const [customPrompt, setCustomPrompt] = useState('');
+  const [enableRetention, setEnableRetention] = useState(false); 
+  const [enableMixedTypes, setEnableMixedTypes] = useState(false); // NEW FEATURE 5
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  
+  // UI State
   const [dragActive, setDragActive] = useState(false);
   const [dueCards, setDueCards] = useState<Question[]>([]);
   const [isReviewing, setIsReviewing] = useState(false);
   const [isSchedulerOpen, setIsSchedulerOpen] = useState(false);
-  
-  // Start Button Loading State
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
 
   useEffect(() => {
+    getLibraryItems().then(setLibraryItems);
     const dueItems = getDueItems();
     if (dueItems.length > 0) {
       setDueCards(dueItems.map(item => item.question));
@@ -53,429 +66,292 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
     }
   }, []);
 
-  const filteredModels = useMemo(() => {
-    return AVAILABLE_MODELS.filter(m => m.provider === provider);
+  // --- DYNAMIC MODEL FETCHING ---
+  useEffect(() => {
+    const loadModels = async () => {
+      if (provider === 'groq') {
+        const apiKey = getApiKey('groq');
+        if (apiKey) {
+          setIsLoadingModels(true);
+          const groqModels = await fetchGroqModels(apiKey);
+          // Merge with default Gemini models
+          const geminiModels = AVAILABLE_MODELS.filter(m => m.provider === 'gemini');
+          // If fetch fails, keep defaults
+          if (groqModels.length > 0) {
+             setDynamicModels([...geminiModels, ...groqModels]);
+             // Reset selection if current model isn't in new list
+             if (!groqModels.find(m => m.id === modelId)) {
+                setModelId(groqModels[0].id);
+             }
+          } else {
+             setDynamicModels(AVAILABLE_MODELS);
+          }
+          setIsLoadingModels(false);
+        }
+      } else {
+        // Reset to defaults for Gemini
+        setDynamicModels(AVAILABLE_MODELS);
+        if (!AVAILABLE_MODELS.find(m => m.id === modelId && m.provider === 'gemini')) {
+           setModelId(AVAILABLE_MODELS[0].id);
+        }
+      }
+    };
+    loadModels();
   }, [provider]);
 
-  const handleProviderChange = (newProvider: AiProvider) => {
-    setProvider(newProvider);
-    const firstModel = AVAILABLE_MODELS.find(m => m.provider === newProvider);
-    if (firstModel) setModelId(firstModel.id);
-  };
-
-  const handleDrag = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === "dragenter" || e.type === "dragover") setDragActive(true);
-    else if (e.type === "dragleave") setDragActive(false);
-  };
-
-  // --- FILE HANDLING WITH FAKE PROGRESS ---
-  const processUploadedFile = (f: File) => {
-    setIsUploading(true);
-    setUploadProgress(0);
-    setFile(null); // Reset previous file while loading
-
-    // Simulate upload/scan progress (1.2 second duration)
-    const interval = setInterval(() => {
-       setUploadProgress((prev) => {
-          if (prev >= 100) {
-             clearInterval(interval);
-             // Finish
-             setFile(f);
-             // Auto-fill topic with filename
-             setTopic(f.name.replace(/\.[^/.]+$/, ""));
-             setIsUploading(false);
-             return 100;
-          }
-          return prev + 10; // Increment 10%
-       });
-    }, 80);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      processUploadedFile(e.dataTransfer.files[0]);
+  const handleFilesUpload = (newFiles: FileList | null) => {
+    if (!newFiles) return;
+    const validFiles = Array.from(newFiles).filter(f => f.name.endsWith('.pdf') || f.name.endsWith('.txt') || f.name.endsWith('.md'));
+    setFiles(prev => [...prev, ...validFiles]);
+    if (validFiles.length > 0 && !topic) {
+       setTopic(validFiles[0].name.replace(/\.[^/.]+$/, ""));
     }
   };
 
-  const handleChangeFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-       processUploadedFile(e.target.files[0]);
-    }
-  };
-  
-  const handleRemoveFile = (e: React.MouseEvent) => {
-     e.stopPropagation(); // Prevent triggering click on parent
-     setFile(null);
-     setTopic('');
-     setUploadProgress(0);
-  };
-
-  const handleFetchNotes = async () => {
-    const sbConfig = getSupabaseConfig();
-    if (!sbConfig) {
-      alert("Supabase belum dikonfigurasi. Pergi ke Settings > Storage > Supabase.");
-      return;
-    }
-    setIsLoadingNotes(true);
-    const notes = await fetchNotesFromSupabase();
-    setCloudNotes(notes);
-    setIsLoadingNotes(false);
-    if (notes.length === 0) alert("Tidak ada catatan ditemukan.");
-  };
-
-  const handleSelectNote = (note: CloudNote) => {
-    setSelectedNote(note);
-    // Pre-fill the topic input with the note title, allowing user to edit it
-    setTopic(note.title); 
+  const toggleLibrarySelection = (id: string | number) => {
+    const sid = String(id);
+    setSelectedLibraryIds(prev => prev.includes(sid) ? prev.filter(i => i !== sid) : [...prev, sid]);
   };
 
   const handleStart = () => {
     // Validation
-    if (inputMethod === 'file' && !file) return;
-    if (inputMethod === 'topic' && !topic.trim()) return;
-    if (inputMethod === 'cloud' && !selectedNote) return;
+    if (inputMethod === 'library' && selectedLibraryIds.length === 0) return alert("Pilih minimal 1 materi dari Library!");
+    if (inputMethod === 'upload' && files.length === 0) return alert("Upload file dulu!");
+    if (inputMethod === 'topic' && !topic.trim()) return alert("Isi topik dulu!");
+    if (!topic && inputMethod === 'library') return alert("Isi 'Fokus Topik' agar AI tidak halusinasi!");
 
     setIsGenerating(true);
-
-    let finalTopicPrompt = topic;
-
-    // Logic Construction based on Input Method
-    if (inputMethod === 'cloud' && selectedNote) {
-       // Combine User's Title + Note Content
-       finalTopicPrompt = `Fokus Topik: ${topic}\n\nReferensi Materi:\n${selectedNote.content}`;
-    } 
     
-    // Add small timeout to allow UI update before heavy operation
+    // Construct Payload
+    let finalTopic = topic;
+    let finalLibraryContext = "";
+
+    // If using Library, aggregate text
+    if (inputMethod === 'library') {
+       const selectedItems = libraryItems.filter(item => selectedLibraryIds.includes(String(item.id)));
+       finalLibraryContext = selectedItems.map(item => `[SOURCE: ${item.title}]\n${item.content}`).join("\n\n");
+    }
+
     setTimeout(() => {
-        onStart(
-            inputMethod === 'file' ? file : null, 
-            { 
-              provider, 
-              modelId, 
-              questionCount, 
-              mode, 
-              examStyle, 
-              topic: finalTopicPrompt // This is what gets sent to AI
-            }
-          );
-          // Note: We don't set setIsGenerating(false) here because App.tsx 
-          // will either unmount this component (success) or we handle error catch there.
-          // But to be safe in case of sync error:
-          setTimeout(() => setIsGenerating(false), 2000); 
+        onStart(inputMethod === 'upload' ? files : [], { 
+          provider, modelId, questionCount, mode, examStyle, 
+          topic: finalTopic, 
+          customPrompt,
+          libraryContext: finalLibraryContext,
+          enableRetention,
+          enableMixedTypes // Pass new flag
+        });
+        setTimeout(() => setIsGenerating(false), 2000); 
     }, 100);
   };
 
-  // Check if ready to start
-  const isReady = 
-    !isUploading && (
-    (inputMethod === 'file' && file) || 
-    (inputMethod === 'topic' && topic.trim().length > 3) || 
-    (inputMethod === 'cloud' && selectedNote && topic.trim().length > 0)
-    );
-
-  const modes = [
-    { id: QuizMode.STANDARD, label: 'Standard', icon: <Layout size={20} />, info: "Santai, tanpa timer." },
-    { id: QuizMode.SCAFFOLDING, label: 'Bertahap', icon: <TrendingUp size={20} />, info: "Mudah ke Sulit." },
-    { id: QuizMode.TIME_RUSH, label: 'Cepat', icon: <Zap size={20} />, info: "20 detik/soal." },
-    { id: QuizMode.SURVIVAL, label: 'Survival', icon: <Skull size={20} />, info: "3 nyawa saja." },
-  ];
-
-  const examStyles = [
-    { id: ExamStyle.CONCEPTUAL, label: 'Konsep', icon: <BookOpen size={18} />, color: 'text-emerald-500', info: "Hafalan & Definisi" },
-    { id: ExamStyle.ANALYTICAL, label: 'Analisa', icon: <BrainCircuit size={18} />, color: 'text-indigo-500', info: "Logika & Sebab-Akibat" },
-    { id: ExamStyle.CASE_STUDY, label: 'Kasus', icon: <Briefcase size={18} />, color: 'text-amber-500', info: "Penerapan Situasi Nyata" },
-    { id: ExamStyle.COMPETITIVE, label: 'Olimpiade', icon: <Target size={18} />, color: 'text-rose-500', info: "Soal Sulit & Pengecoh" },
-  ];
+  const isReady = (inputMethod === 'library' && selectedLibraryIds.length > 0 && topic.length > 2) || 
+                  (inputMethod === 'upload' && files.length > 0) || 
+                  (inputMethod === 'topic' && topic.trim().length > 3);
 
   return (
     <div className="w-full max-w-4xl mx-auto space-y-8 pb-24 text-theme-text">
       <div className="text-center space-y-2">
-        <motion.h1 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="text-5xl font-bold tracking-tighter"
-        >
-          Mikir <span className="font-light opacity-50 text-4xl">( •_•)</span>
-        </motion.h1>
+        <motion.h1 initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-5xl font-bold tracking-tighter">Mikir <span className="font-light opacity-50 text-4xl">( •_•)</span></motion.h1>
       </div>
 
       <DashboardMascot onOpenScheduler={() => setIsSchedulerOpen(true)} />
 
-      {/* ACTIVE SESSION ALERT */}
       <AnimatePresence>
         {hasActiveSession && (
-          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="w-full">
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="w-full">
             <button onClick={onContinue} className="w-full bg-emerald-500 hover:bg-emerald-600 text-white p-4 rounded-3xl shadow-lg flex items-center justify-center space-x-3">
-              <PlayCircle size={24} />
-              <span className="text-lg font-bold">Lanjutkan Quiz</span>
+              <PlayCircle size={24} /> <span className="text-lg font-bold">Lanjutkan Quiz</span>
             </button>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* SRS ALERT */}
-      <AnimatePresence>
-        {dueCards.length > 0 && (
-          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="w-full">
-            <button onClick={() => setIsReviewing(true)} className="w-full bg-theme-primary text-white p-4 rounded-3xl shadow-lg flex items-center justify-between px-8">
-              <div className="flex items-center space-x-3">
-                <div className="p-2 bg-white/20 rounded-full"><Layers size={24} /></div>
-                <div className="text-left"><h3 className="text-lg font-bold">Review Tersedia</h3></div>
-              </div>
-              <div className="text-right"><span className="text-3xl font-black">{dueCards.length}</span> <span className="text-xs block opacity-80">Kartu</span></div>
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* MAIN CONFIG CARD */}
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ delay: 0.1 }}
-        className="bg-theme-glass border border-theme-border rounded-[2.5rem] p-6 md:p-10 shadow-xl relative"
-      >
-        {/* INPUT TABS - SOLID BACKGROUND */}
-        <div className="flex p-1 bg-theme-bg rounded-2xl mb-8 w-fit mx-auto border border-theme-border flex-wrap justify-center shadow-sm">
-          <button onClick={() => { setInputMethod('file'); setTopic(''); }} className={`flex items-center space-x-2 px-4 md:px-6 py-2 rounded-xl transition-all ${inputMethod === 'file' ? 'bg-theme-primary text-white shadow-md font-bold' : 'text-theme-muted hover:text-theme-text hover:bg-theme-glass'}`}>
-            <Upload size={18} /> <span>File</span>
-          </button>
-          <button onClick={() => { setInputMethod('topic'); setTopic(''); }} className={`flex items-center space-x-2 px-4 md:px-6 py-2 rounded-xl transition-all ${inputMethod === 'topic' ? 'bg-theme-primary text-white shadow-md font-bold' : 'text-theme-muted hover:text-theme-text hover:bg-theme-glass'}`}>
-            <Type size={18} /> <span>Topik</span>
-          </button>
-          <button onClick={() => { setInputMethod('cloud'); setTopic(''); if(cloudNotes.length === 0) handleFetchNotes(); }} className={`flex items-center space-x-2 px-4 md:px-6 py-2 rounded-xl transition-all ${inputMethod === 'cloud' ? 'bg-theme-primary text-white shadow-md font-bold' : 'text-theme-muted hover:text-theme-text hover:bg-theme-glass'}`}>
-            <Cloud size={18} /> <span>Notes</span>
-          </button>
+      <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-theme-glass border border-theme-border rounded-[2.5rem] p-6 md:p-8 shadow-xl relative">
+        
+        {/* INPUT TABS */}
+        <div className="flex p-1 bg-theme-bg rounded-2xl mb-8 w-fit mx-auto border border-theme-border justify-center shadow-sm">
+          <button onClick={() => setInputMethod('library')} className={`flex items-center space-x-2 px-6 py-2 rounded-xl transition-all ${inputMethod === 'library' ? 'bg-theme-primary text-white shadow-md font-bold' : 'text-theme-muted hover:bg-theme-glass'}`}><BookOpen size={18} /> <span>Library</span></button>
+          <button onClick={() => setInputMethod('upload')} className={`flex items-center space-x-2 px-6 py-2 rounded-xl transition-all ${inputMethod === 'upload' ? 'bg-theme-primary text-white shadow-md font-bold' : 'text-theme-muted hover:bg-theme-glass'}`}><Upload size={18} /> <span>Upload</span></button>
+          <button onClick={() => setInputMethod('topic')} className={`flex items-center space-x-2 px-6 py-2 rounded-xl transition-all ${inputMethod === 'topic' ? 'bg-theme-primary text-white shadow-md font-bold' : 'text-theme-muted hover:bg-theme-glass'}`}><Type size={18} /> <span>Manual</span></button>
         </div>
 
-        {/* INPUT AREA */}
+        {/* --- MAIN INPUT AREA --- */}
         <div className="mb-8">
-          
-          {/* 1. FILE INPUT WITH LOADING VISUALIZATION */}
-          {inputMethod === 'file' && (
-            <motion.div 
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-              className={`relative group h-40 border-2 border-dashed rounded-3xl transition-all flex flex-col items-center justify-center text-center overflow-hidden
-                ${dragActive ? 'border-theme-primary bg-theme-primary/10' : file ? 'border-emerald-400/50 bg-emerald-500/5' : 'border-theme-border hover:border-theme-primary hover:bg-theme-bg/20'}
-                ${!isUploading && !file ? 'cursor-pointer' : ''}
-              `}
-              onDragEnter={handleDrag} onDragLeave={handleDrag} onDragOver={handleDrag} onDrop={handleDrop}
-              onClick={() => { if(!isUploading && !file) document.getElementById('file-upload')?.click() }}
-            >
-              <input id="file-upload" type="file" className="hidden" accept=".pdf,.md,.txt,.ppt,.pptx" onChange={handleChangeFile} disabled={isUploading} />
-              
-              <AnimatePresence mode='wait'>
-                  {isUploading ? (
-                     <motion.div 
-                       key="uploading"
-                       initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
-                       className="w-full h-full flex flex-col items-center justify-center relative"
-                     >
-                        <RefreshCw size={32} className="text-theme-primary animate-spin mb-3" />
-                        <div className="w-1/2 h-2 bg-theme-bg/50 rounded-full overflow-hidden">
-                           <motion.div 
-                             className="h-full bg-theme-primary"
-                             initial={{ width: 0 }}
-                             animate={{ width: `${uploadProgress}%` }}
-                           />
-                        </div>
-                        <p className="text-xs font-bold text-theme-primary mt-2 uppercase tracking-widest">
-                            Memindai Materi ({uploadProgress}%)
-                        </p>
-                     </motion.div>
-                  ) : file ? (
-                     <motion.div 
-                        key="file-ready"
-                        initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-                        className="flex flex-col items-center relative w-full h-full justify-center"
-                     >
-                        <div className="bg-white p-3 rounded-2xl shadow-sm mb-2 relative">
-                            <FileText size={32} className="text-emerald-500" />
-                            <div className="absolute -top-1 -right-1 bg-emerald-500 text-white rounded-full p-0.5 border-2 border-white">
-                                <CheckCircle2 size={12} />
+          {inputMethod === 'library' && (
+             <div className="space-y-4">
+                <div className="max-h-60 overflow-y-auto custom-scrollbar border border-theme-border rounded-2xl bg-white/40 p-2">
+                   {libraryItems.length === 0 ? (
+                      <p className="text-center py-8 text-slate-400 text-sm">Library kosong. Upload materi di Workspace dulu.</p>
+                   ) : (
+                      libraryItems.map(item => (
+                         <div key={item.id} onClick={() => toggleLibrarySelection(item.id)} className={`flex items-center justify-between p-3 mb-1 rounded-xl cursor-pointer transition-all border ${selectedLibraryIds.includes(String(item.id)) ? 'bg-indigo-50 border-indigo-300 shadow-sm' : 'border-transparent hover:bg-white/60'}`}>
+                            <div className="flex items-center gap-3 overflow-hidden">
+                               <div className={`p-2 rounded-lg ${selectedLibraryIds.includes(String(item.id)) ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-400'}`}><FileText size={16} /></div>
+                               <span className={`text-sm font-medium truncate ${selectedLibraryIds.includes(String(item.id)) ? 'text-indigo-800' : 'text-slate-600'}`}>{item.title}</span>
                             </div>
-                        </div>
-                        <span className="font-bold text-lg text-theme-text mb-1">{file.name}</span>
-                        <div className="flex items-center space-x-1 text-emerald-600 text-xs font-bold bg-emerald-100 px-2 py-1 rounded-full">
-                           <CheckCircle2 size={10} /> <span>Siap Diproses</span>
-                        </div>
-                        
-                        {/* Change File Button */}
-                        <button 
-                           onClick={handleRemoveFile}
-                           className="absolute top-3 right-3 p-2 bg-white/50 hover:bg-rose-100 text-theme-muted hover:text-rose-500 rounded-full transition-colors"
-                           title="Ganti File"
-                        >
-                            <X size={18} />
-                        </button>
-                     </motion.div>
-                  ) : (
-                     <motion.div 
-                       key="empty"
-                       initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                       className="text-theme-muted"
-                     >
-                       <Upload size={32} className="mx-auto mb-2 opacity-50" />
-                       <p className="text-sm font-medium hidden md:block">Drag & drop materi pelajaran</p>
-                       <p className="text-sm font-medium md:hidden">Tap untuk Upload Materi</p>
-                       <p className="text-xs opacity-50 mt-1">PDF, TXT, MD Supported</p>
-                     </motion.div>
-                  )}
-              </AnimatePresence>
-            </motion.div>
+                            {selectedLibraryIds.includes(String(item.id)) && <CheckCircle2 size={18} className="text-indigo-500" />}
+                         </div>
+                      ))
+                   )}
+                </div>
+                <div className="flex items-center justify-between text-xs text-slate-500 px-2">
+                   <span>Terpilih: {selectedLibraryIds.length} materi</span>
+                   <button onClick={() => window.location.hash = '#workspace'} className="text-indigo-500 hover:underline">Kelola Library</button>
+                </div>
+             </div>
           )}
 
-          {/* 2. TOPIC INPUT (MANUAL) */}
-          {inputMethod === 'topic' && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-              <textarea 
-                value={topic}
-                onChange={(e) => setTopic(e.target.value)}
-                placeholder="Contoh: Sejarah Revolusi Industri..."
-                className="w-full h-40 bg-theme-bg/50 border-2 border-theme-border rounded-3xl p-6 text-theme-text placeholder:text-theme-muted focus:outline-none focus:border-theme-primary focus:bg-theme-bg transition-all text-lg"
-              />
-            </motion.div>
-          )}
-
-          {/* 3. CLOUD NOTES INPUT (UPDATED FLOW) */}
-          {inputMethod === 'cloud' && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-               {/* If Note Selected: Show Selected Card + Title Editor */}
-               {selectedNote ? (
-                  <div className="space-y-4">
-                     <div className="flex items-center justify-between bg-theme-primary/10 border border-theme-primary/30 p-4 rounded-2xl">
-                        <div className="flex items-center gap-3 overflow-hidden">
-                           <div className="p-2 bg-theme-primary text-white rounded-lg"><BookOpen size={20} /></div>
-                           <div className="min-w-0">
-                              <p className="text-xs text-theme-primary font-bold uppercase tracking-wider">Sumber Materi</p>
-                              <p className="font-medium truncate text-sm">{selectedNote.title || "Catatan Tanpa Judul"}</p>
-                           </div>
-                        </div>
-                        <button onClick={() => { setSelectedNote(null); setTopic(''); }} className="p-2 hover:bg-white/50 rounded-full transition-colors text-theme-muted hover:text-rose-500">
-                           <X size={18} />
-                        </button>
-                     </div>
-
-                     <div className="relative">
-                        <label className="text-xs font-bold text-theme-muted uppercase tracking-wider ml-1 mb-1 block">Judul Kuis (Editable)</label>
-                        <input 
-                           type="text"
-                           value={topic}
-                           onChange={(e) => setTopic(e.target.value)}
-                           className="w-full bg-theme-bg/50 border border-theme-border rounded-2xl px-4 py-4 pr-10 text-theme-text font-medium focus:ring-2 focus:ring-theme-primary focus:outline-none"
-                           placeholder="Tentukan judul kuis..."
-                        />
-                        <Edit3 size={16} className="absolute right-4 top-9 text-theme-muted opacity-50" />
-                     </div>
+          {inputMethod === 'upload' && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`relative group h-48 border-2 border-dashed rounded-3xl transition-all flex flex-col items-center justify-center text-center overflow-hidden p-8 ${dragActive ? 'border-theme-primary bg-theme-primary/10' : 'border-theme-border hover:border-theme-primary hover:bg-theme-bg/20'} cursor-pointer`} onDragEnter={(e)=>{e.preventDefault();setDragActive(true)}} onDragLeave={(e)=>{e.preventDefault();setDragActive(false)}} onDragOver={(e)=>{e.preventDefault();setDragActive(true)}} onDrop={e => {e.preventDefault(); handleFilesUpload(e.dataTransfer.files);}} onClick={() => document.getElementById('file-upload')?.click()}>
+               <input id="file-upload" type="file" multiple className="hidden" accept=".pdf,.md,.txt" onChange={(e) => handleFilesUpload(e.target.files)} />
+               {files.length > 0 ? (
+                  <div className="w-full space-y-2">
+                     {files.map((f,i) => <div key={i} className="bg-white/80 p-2 rounded-lg text-sm flex items-center justify-center text-indigo-700 shadow-sm"><CheckCircle2 size={14} className="mr-2"/> {f.name}</div>)}
                   </div>
                ) : (
-                 /* If No Note Selected: Show List */
-                 <div className="h-64 bg-theme-bg/50 border border-theme-border rounded-3xl p-4 overflow-hidden flex flex-col">
-                    <div className="flex justify-between items-center mb-3 px-2">
-                      <h3 className="text-sm font-bold flex items-center text-theme-muted"><Cloud size={16} className="mr-2" /> Pilih Catatan</h3>
-                      <button onClick={handleFetchNotes} disabled={isLoadingNotes} className="p-1.5 hover:bg-theme-bg rounded-lg text-theme-muted transition-colors"><RefreshCw size={16} className={isLoadingNotes ? "animate-spin" : ""} /></button>
-                    </div>
-                    <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
-                        {cloudNotes.length === 0 ? (
-                          <div className="h-full flex flex-col items-center justify-center text-theme-muted text-xs text-center px-4">
-                             <p>Tidak ada catatan.</p>
-                             <button onClick={handleFetchNotes} className="mt-2 text-theme-primary font-bold hover:underline">Refresh</button>
-                          </div>
-                        ) : (
-                          cloudNotes.map(note => (
-                            <button key={note.id} onClick={() => handleSelectNote(note)} className="w-full text-left p-3 rounded-xl border bg-theme-bg/40 border-theme-border text-theme-text hover:border-theme-primary/50 hover:bg-white/50 transition-all text-sm group">
-                                <div className="font-medium truncate group-hover:text-theme-primary transition-colors">{note.title || "Tanpa Judul"}</div>
-                                <div className="text-[10px] text-theme-muted opacity-60 mt-1 flex justify-between">
-                                   <span>{new Date(note.created_at).toLocaleDateString()}</span>
-                                   {note.tags && note.tags.length > 0 && <span>#{note.tags[0]}</span>}
-                                </div>
-                            </button>
-                          ))
-                        )}
-                    </div>
-                 </div>
+                  <>
+                    <Upload size={32} className="text-theme-primary mb-3" />
+                    <p className="font-bold text-theme-text">Klik atau Drop File PDF</p>
+                  </>
                )}
             </motion.div>
           )}
+
+          {inputMethod === 'topic' && (
+             <textarea value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="Tulis topik atau paste materi di sini..." className="w-full h-48 bg-theme-bg/50 border-2 border-theme-border rounded-3xl p-6 text-theme-text text-lg focus:outline-none focus:border-theme-primary" />
+          )}
         </div>
 
-        {/* SETTINGS GRID */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
-          <div>
-            <div className="flex items-center mb-3 ml-1"><label className="text-sm font-medium">Mode Quiz</label></div>
-            <div className="grid grid-cols-2 gap-3">
-              {modes.map(m => (
-                <button key={m.id} onClick={() => setMode(m.id)} className={`w-full p-4 rounded-xl border flex flex-col items-start transition-all text-left h-full ${mode === m.id ? 'bg-theme-primary/10 border-theme-primary text-theme-primary shadow-sm' : 'bg-theme-bg/20 border-transparent text-theme-muted hover:bg-theme-bg/40'}`}>
-                  <div className="flex items-center space-x-2 mb-1">{m.icon} <span className="text-sm font-semibold">{m.label}</span></div>
-                  <span className="text-xs opacity-70">{m.info}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-          <div>
-            <div className="flex items-center mb-3 ml-1"><label className="text-sm font-medium">Fokus Soal</label></div>
-            <div className="grid grid-cols-2 gap-3">
-              {examStyles.map(s => (
-                <button key={s.id} onClick={() => setExamStyle(s.id)} className={`w-full p-4 rounded-xl border flex flex-col items-start transition-all text-left h-full ${examStyle === s.id ? `bg-theme-bg border-current ${s.color} shadow-sm` : 'bg-theme-bg/20 border-transparent text-theme-muted hover:bg-theme-bg/40'}`}>
-                  <div className="flex items-center space-x-2 mb-1">{s.icon} <span className="text-sm font-semibold">{s.label}</span></div>
-                   <span className="text-xs opacity-70">{s.info}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
+        {/* --- COMMON CONTROLS --- */}
+        <div className="space-y-6">
+           {(inputMethod === 'library' || inputMethod === 'upload') && (
+              <div className="bg-white/40 p-4 rounded-2xl border border-theme-border">
+                 <label className="flex items-center text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                    <Target size={14} className="mr-1" /> Fokus Topik (Wajib)
+                 </label>
+                 <input 
+                   type="text" 
+                   value={topic} 
+                   onChange={(e) => setTopic(e.target.value)} 
+                   placeholder="Contoh: Bab 3 Fotosintesis, Sejarah PD II..." 
+                   className="w-full bg-transparent border-b border-slate-300 py-2 text-lg font-bold text-slate-800 placeholder:text-slate-300 focus:outline-none focus:border-indigo-500 transition-colors"
+                 />
+                 <p className="text-[10px] text-slate-400 mt-1">AI akan menggunakan materi di atas, TAPI hanya fokus membuat soal tentang topik ini.</p>
+              </div>
+           )}
 
-        <div className="space-y-6 mb-8">
-           <div className="space-y-3">
-             <div className="flex justify-between text-sm font-medium"><span>Jumlah Soal</span> <span>{questionCount}</span></div>
-             <input type="range" min="5" max="50" step="5" value={questionCount} onChange={(e) => setQuestionCount(Number(e.target.value))} className="w-full h-2 bg-theme-bg rounded-lg appearance-none cursor-pointer accent-theme-primary" />
+           <div className="bg-theme-bg/30 p-4 rounded-2xl border border-theme-border">
+              <div className="flex gap-2 mb-3">
+                 <button onClick={() => setProvider('gemini')} className={`flex-1 py-1.5 rounded-lg text-xs font-bold uppercase transition-all ${provider === 'gemini' ? 'bg-indigo-500 text-white shadow-md' : 'bg-white/50 text-slate-500'}`}>Gemini</button>
+                 <button onClick={() => setProvider('groq')} className={`flex-1 py-1.5 rounded-lg text-xs font-bold uppercase transition-all ${provider === 'groq' ? 'bg-orange-500 text-white shadow-md' : 'bg-white/50 text-slate-500'}`}>Groq</button>
+              </div>
+              
+              {isLoadingModels ? (
+                 <div className="py-2 text-center text-xs text-slate-400"><RefreshCw className="animate-spin inline mr-2" size={12}/> Loading Models...</div>
+              ) : (
+                 <select 
+                   value={modelId} 
+                   onChange={(e) => setModelId(e.target.value)} 
+                   className="w-full bg-white/70 border border-slate-200 text-slate-800 text-sm rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                 >
+                    {dynamicModels.filter(m => m.provider === provider).map(m => (
+                       <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                 </select>
+              )}
            </div>
-           
-           <div className="grid md:grid-cols-2 gap-6">
-              <div className="space-y-2">
-                 <label className="text-sm font-medium ml-1">AI Provider</label>
-                 
-                 {/* HIGH CONTRAST PROVIDER TABS */}
-                 <div className="flex bg-theme-glass p-1 rounded-xl border border-theme-border">
-                    <button 
-                       onClick={() => handleProviderChange('gemini')} 
-                       className={`flex-1 py-2.5 text-sm rounded-lg flex items-center justify-center transition-all font-medium ${provider === 'gemini' ? 'bg-theme-primary text-white shadow-md' : 'text-theme-muted hover:text-theme-text hover:bg-theme-bg/50'}`}
-                    >
-                       <Zap size={16} className="mr-2" /> Gemini
-                    </button>
-                    <button 
-                       onClick={() => handleProviderChange('groq')} 
-                       className={`flex-1 py-2.5 text-sm rounded-lg flex items-center justify-center transition-all font-medium ${provider === 'groq' ? 'bg-orange-500 text-white shadow-md' : 'text-theme-muted hover:text-orange-500 hover:bg-theme-bg/50'}`}
-                    >
-                       <Cpu size={16} className="mr-2" /> Groq
-                    </button>
+
+           {/* Mode Selection */}
+           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {MODE_CARDS.map((m) => (
+                 <button key={m.id} onClick={() => setMode(m.id)} className={`relative p-3 rounded-2xl border-2 text-left transition-all ${mode === m.id ? `${m.color} bg-white shadow-md` : 'bg-transparent border-slate-200 text-slate-400 hover:bg-slate-50'}`}>
+                    <div className="flex justify-between mb-1"><m.icon size={20} /> {mode === m.id && <CheckCircle2 size={16}/>}</div>
+                    <div className="font-bold text-sm">{m.label}</div>
+                    <div className="text-[10px] opacity-70">{m.desc}</div>
+                 </button>
+              ))}
+           </div>
+
+           {/* --- STICKY QUIZ TOGGLE --- */}
+           <button 
+             onClick={() => setEnableRetention(!enableRetention)}
+             className={`w-full flex items-center justify-between p-4 rounded-2xl border transition-all ${enableRetention ? 'bg-indigo-50 border-indigo-300' : 'bg-theme-bg/30 border-theme-border'}`}
+           >
+              <div className="flex items-center">
+                 <div className={`p-2 rounded-lg mr-3 ${enableRetention ? 'bg-indigo-500 text-white' : 'bg-slate-200 text-slate-400'}`}>
+                    <BrainCircuit size={20} />
+                 </div>
+                 <div className="text-left">
+                    <span className={`block font-bold text-sm ${enableRetention ? 'text-indigo-800' : 'text-slate-500'}`}>Mode "Lengket" (Sticky)</span>
+                    <span className="text-[10px] text-slate-400">Ulang otomatis soal acak biar nempel.</span>
                  </div>
               </div>
-              <div className="space-y-2">
-                 <label className="text-sm font-medium ml-1">Model</label>
-                 <select value={modelId} onChange={(e) => setModelId(e.target.value)} className="w-full bg-theme-glass border border-theme-border rounded-xl px-3 py-2.5 text-sm text-theme-text focus:outline-none focus:border-theme-primary">
-                   {filteredModels.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
-                 </select>
+              <div className={`w-10 h-6 rounded-full p-1 transition-colors ${enableRetention ? 'bg-indigo-500' : 'bg-slate-300'}`}><motion.div className="w-4 h-4 bg-white rounded-full shadow-sm" animate={{ x: enableRetention ? 16 : 0 }} /></div>
+           </button>
+
+           {/* --- FEATURE 5: MIXED TYPES TOGGLE --- */}
+           <button 
+             onClick={() => setEnableMixedTypes(!enableMixedTypes)}
+             className={`w-full flex items-center justify-between p-4 rounded-2xl border transition-all ${enableMixedTypes ? 'bg-violet-50 border-violet-300' : 'bg-theme-bg/30 border-theme-border'}`}
+           >
+              <div className="flex items-center">
+                 <div className={`p-2 rounded-lg mr-3 ${enableMixedTypes ? 'bg-violet-500 text-white' : 'bg-slate-200 text-slate-400'}`}>
+                    <Shuffle size={20} />
+                 </div>
+                 <div className="text-left">
+                    <span className={`block font-bold text-sm ${enableMixedTypes ? 'text-violet-800' : 'text-slate-500'}`}>Variasi Soal (True/False & Isian)</span>
+                    <span className="text-[10px] text-slate-400">Campur Pilihan Ganda dengan Benar/Salah dan Isian Singkat.</span>
+                 </div>
               </div>
+              <div className={`w-10 h-6 rounded-full p-1 transition-colors ${enableMixedTypes ? 'bg-violet-500' : 'bg-slate-300'}`}><motion.div className="w-4 h-4 bg-white rounded-full shadow-sm" animate={{ x: enableMixedTypes ? 16 : 0 }} /></div>
+           </button>
+
+           <div className="bg-theme-bg/30 p-4 rounded-2xl border border-theme-border flex items-center justify-between">
+               <span className="text-sm font-bold text-theme-text">Jumlah Soal Dasar: {questionCount}</span>
+               <input type="range" min="5" max="30" step="5" value={questionCount} onChange={(e) => setQuestionCount(parseInt(e.target.value))} className="w-32 accent-theme-primary" />
            </div>
         </div>
 
-        <GlassButton fullWidth onClick={handleStart} disabled={!isReady || isGenerating} isLoading={isGenerating}>
-          {inputMethod === 'file' ? 'Analisis Dokumen & Buat Soal' : inputMethod === 'topic' ? 'Generate Soal dari Topik' : 'Generate Soal dari Catatan'}
-        </GlassButton>
+        {/* Advanced Toggle */}
+        <div className="mb-4 text-center">
+            <button 
+              onClick={() => setShowAdvanced(!showAdvanced)} 
+              className="flex items-center justify-center gap-2 text-xs font-bold text-theme-muted hover:text-theme-primary transition-colors mx-auto"
+            >
+               <Settings2 size={14} /> {showAdvanced ? "Sembunyikan Opsi" : "Opsi Lanjutan"}
+            </button>
+            
+            <AnimatePresence>
+               {showAdvanced && (
+                  <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden text-left mt-2">
+                     <div className="bg-theme-bg/30 p-4 rounded-2xl border border-theme-border">
+                        <div className="flex items-center gap-2 mb-2 text-theme-primary">
+                           <Sparkles size={14} /> <span className="text-xs font-bold uppercase">Instruksi Khusus AI</span>
+                        </div>
+                        <textarea 
+                          value={customPrompt} 
+                          onChange={(e) => setCustomPrompt(e.target.value)}
+                          placeholder="Contoh: Fokus pada tanggal dan tokoh penting, buat soal yang menjebak..." 
+                          className="w-full h-20 bg-white/50 border border-theme-border rounded-xl p-3 text-sm focus:outline-none focus:ring-1 focus:ring-theme-primary resize-none"
+                        />
+                     </div>
+                  </motion.div>
+               )}
+            </AnimatePresence>
+        </div>
+
+        <div className="mt-8">
+           <GlassButton fullWidth onClick={handleStart} disabled={!isReady || isGenerating} isLoading={isGenerating}>
+             {inputMethod === 'library' ? `Generate Quiz dari ${selectedLibraryIds.length} Materi` : 'Mulai Magic'}
+           </GlassButton>
+        </div>
 
       </motion.div>
 
-      <StudyScheduler isOpen={isSchedulerOpen} onClose={() => setIsSchedulerOpen(false)} defaultTopic={inputMethod === 'topic' ? topic : file?.name} />
+      <StudyScheduler isOpen={isSchedulerOpen} onClose={() => setIsSchedulerOpen(false)} defaultTopic={topic} />
       <AnimatePresence>
-        {isReviewing && (
-          <FlashcardScreen questions={dueCards} onClose={() => { setIsReviewing(false); const updatedDue = getDueItems(); setDueCards(updatedDue.map(i => i.question)); }} />
-        )}
+        {isReviewing && <FlashcardScreen questions={dueCards} onClose={() => { setIsReviewing(false); setDueCards(getDueItems().map(i => i.question)); }} />}
       </AnimatePresence>
     </div>
   );

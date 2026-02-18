@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS public.generated_quizzes (
   questions jsonb NOT NULL
 );
 
--- 2. Tabel Neuro Notes (Sumber Catatan)
+-- 2. Tabel Neuro Notes (Sumber Catatan & Library)
 create table if not exists public.neuro_notes (
   id text primary key,
   timestamp bigint,
@@ -39,16 +39,13 @@ create table if not exists public.neuro_notes (
 );
 
 -- 3. Reset Permissions (Nuclear Option)
--- Matikan RLS dulu untuk reset
 alter table public.generated_quizzes disable row level security;
 alter table public.neuro_notes disable row level security;
 
--- Nyalakan RLS kembali
 alter table public.generated_quizzes enable row level security;
 alter table public.neuro_notes enable row level security;
 
 -- 4. KEBIJAKAN "GOD MODE" (CRUD BEBAS)
--- Ini mengizinkan Select, Insert, Update, Delete untuk siapa saja yang punya API Key.
 drop policy if exists "God Mode Quizzes" on public.generated_quizzes;
 create policy "God Mode Quizzes" on public.generated_quizzes for all using (true) with check (true);
 
@@ -78,9 +75,6 @@ interface QuizRecord {
 // --- 3. THE CLIENT ---
 export const MikirCloud = {
   
-  /**
-   * Mendapatkan raw client instance (private helper)
-   */
   _client(config: SupabaseConfig) {
     return getSupabaseClient(config.url, config.key);
   },
@@ -96,7 +90,6 @@ export const MikirCloud = {
 
       if (error) throw new Error(`Gagal mengambil quiz: ${error.message}`);
       
-      // Transform snake_case DB to camelCase App
       return (data as QuizRecord[]).map(item => ({
         id: item.id,
         fileName: item.file_name,
@@ -112,8 +105,6 @@ export const MikirCloud = {
 
     async create(config: SupabaseConfig, payload: any) {
       const sb = MikirCloud._client(config);
-      
-      // Mapping App Data -> DB Columns
       const dbPayload = {
         file_name: payload.fileName || payload.file_name,
         model_id: payload.modelId || payload.model_id,
@@ -121,7 +112,6 @@ export const MikirCloud = {
         topic_summary: payload.topicSummary || payload.topic_summary,
         questions: payload.questions
       };
-
       const { error } = await sb.from('generated_quizzes').insert(dbPayload);
       if (error) throw new Error(`Gagal upload: ${error.message}`);
       return true;
@@ -136,70 +126,64 @@ export const MikirCloud = {
 
     async updateQuestions(config: SupabaseConfig, id: number | string, questions: Question[]) {
       const sb = MikirCloud._client(config);
-      const { error } = await sb
-        .from('generated_quizzes')
-        .update({ questions: questions })
-        .eq('id', id);
-      
+      const { error } = await sb.from('generated_quizzes').update({ questions: questions }).eq('id', id);
       if (error) throw new Error(`Gagal update soal: ${error.message}`);
       return true;
     }
   },
 
-  // --- NOTES MODULE (Updated to 'neuro_notes') ---
+  // --- NOTES MODULE (Includes Library Items) ---
   notes: {
     async list(config: SupabaseConfig): Promise<CloudNote[]> {
       const sb = MikirCloud._client(config);
       try {
-        // Fetch from neuro_notes
         const { data, error } = await sb
           .from('neuro_notes')
           .select('*')
           .order('timestamp', { ascending: false })
-          .limit(20);
+          .limit(50); // Increased limit for library
         
-        if (error) {
-          console.warn("Notes fetch warning:", error.message);
-          return [];
-        }
-
+        if (error) return [];
         if (!data) return [];
 
-        // Map neuro_notes schema to App's CloudNote interface
-        // Schema: id (text), timestamp (int8), topic (text), mode (text), content (text), provider (text)
         return data.map((item: any) => {
-          
-          // --- LOGIKA PEMBERSIHAN JUDUL (FIX TITLE OVERFLOW) ---
           let displayTitle = item.topic;
           const rawContent = item.content || "";
 
-          // 1. Jika topic kosong/null, ambil potongan content
           if (!displayTitle || displayTitle.trim() === "") {
-             // Ambil baris pertama atau 50 karakter pertama
              const firstLine = rawContent.split('\n')[0];
              displayTitle = firstLine.substring(0, 50);
              if (rawContent.length > 50) displayTitle += "...";
-          } 
-          // 2. Jika topic ada tapi SANGAT PANJANG (indikasi user salah save content ke topic)
-          else if (displayTitle.length > 80) {
+          } else if (displayTitle.length > 80) {
              displayTitle = displayTitle.substring(0, 80) + "...";
           }
 
           return {
             id: item.id,
-            title: displayTitle || "Catatan Tanpa Judul", // Judul yang sudah dibersihkan
+            title: displayTitle || "Catatan Tanpa Judul",
             content: rawContent,
-            // Convert timestamp (bigint) to ISO string for UI
             created_at: item.timestamp ? new Date(Number(item.timestamp)).toISOString() : new Date().toISOString(),
-            // Map metadata to tags
-            tags: [item.mode, item.provider].filter(Boolean)
+            tags: [item.mode, item.provider].filter(Boolean) // We store type in 'provider' column for now
           };
         });
 
       } catch (e) {
-        console.error("Notes fetch error:", e);
         return [];
       }
+    },
+
+    async create(config: SupabaseConfig, payload: any) {
+        const sb = MikirCloud._client(config);
+        const { error } = await sb.from('neuro_notes').insert(payload);
+        if (error) throw new Error(`Gagal simpan note: ${error.message}`);
+        return true;
+    },
+
+    async delete(config: SupabaseConfig, id: string | number) {
+        const sb = MikirCloud._client(config);
+        const { error } = await sb.from('neuro_notes').delete().eq('id', id);
+        if (error) throw new Error(`Gagal hapus note: ${error.message}`);
+        return true;
     }
   },
 
@@ -207,18 +191,13 @@ export const MikirCloud = {
   system: {
     async checkConnection(config: SupabaseConfig) {
       const sb = MikirCloud._client(config);
-      
-      // Tes koneksi dengan mengambil 1 baris ID saja (ringan)
       const { error } = await sb.from('generated_quizzes').select('id').limit(1);
-
       if (error) {
-        // Deteksi error spesifik: Tabel tidak ada (42P01 di Postgres)
         if (error.message.includes('relation') && error.message.includes('does not exist')) {
           return { connected: true, schemaMissing: true, message: "Tabel belum dibuat." };
         }
         return { connected: false, schemaMissing: false, message: error.message };
       }
-
       return { connected: true, schemaMissing: false, message: "OK" };
     }
   }

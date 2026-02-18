@@ -1,5 +1,6 @@
+
 import React from 'react';
-import { Home, History, Settings, Gamepad2 } from 'lucide-react';
+import { Home, FolderOpen, Settings, Gamepad2 } from 'lucide-react';
 import { AppView } from '../types';
 
 interface NavigationProps {
@@ -9,9 +10,9 @@ interface NavigationProps {
 
 export const Navigation: React.FC<NavigationProps> = ({ currentView, onChangeView }) => {
   const tabs = [
-    { id: AppView.GENERATOR, icon: Home, label: 'Home' },
+    { id: AppView.GENERATOR, icon: Home, label: 'Generator' },
     { id: AppView.VIRTUAL_ROOM, icon: Gamepad2, label: 'Mixer' },
-    { id: AppView.HISTORY, icon: History, label: 'Riwayat' },
+    { id: AppView.WORKSPACE, icon: FolderOpen, label: 'Workspace' },
     { id: AppView.SETTINGS, icon: Settings, label: 'Settings' },
   ];
 

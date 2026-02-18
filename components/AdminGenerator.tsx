@@ -30,8 +30,8 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
   const [includeSupabase, setIncludeSupabase] = useState(false);
 
   // Key Values (Manual Input by default)
-  const [geminiKey, setGeminiKey] = useState('');
-  const [groqKey, setGroqKey] = useState('');
+  const [geminiKeys, setGeminiKeys] = useState(''); // Textarea content (one per line)
+  const [groqKeys, setGroqKeys] = useState('');   // Textarea content (one per line)
   const [supabaseUrl, setSupabaseUrl] = useState('');
   const [supabaseKey, setSupabaseKey] = useState('');
 
@@ -39,10 +39,10 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
   const loadMyKeys = (type: 'gemini' | 'groq' | 'supabase') => {
     if (type === 'gemini') {
         const key = getApiKey('gemini');
-        if (key) setGeminiKey(key);
+        if (key) setGeminiKeys(key);
     } else if (type === 'groq') {
         const key = getApiKey('groq');
-        if (key) setGroqKey(key);
+        if (key) setGroqKeys(key);
     } else if (type === 'supabase') {
         const config = getSupabaseConfig();
         if (config) {
@@ -77,20 +77,26 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
         }
 
         // Keys
-        if (data.config.geminiKey) {
-          setIncludeGemini(true);
-          setGeminiKey(data.config.geminiKey);
+        if (data.config.geminiKeys && data.config.geminiKeys.length > 0) {
+           setIncludeGemini(true);
+           setGeminiKeys(data.config.geminiKeys.join('\n'));
+        } else if (data.config.geminiKey) {
+           setIncludeGemini(true);
+           setGeminiKeys(data.config.geminiKey);
         } else {
-          setIncludeGemini(false);
-          setGeminiKey('');
+           setIncludeGemini(false);
+           setGeminiKeys('');
         }
 
-        if (data.config.groqKey) {
+        if (data.config.groqKeys && data.config.groqKeys.length > 0) {
+           setIncludeGroq(true);
+           setGroqKeys(data.config.groqKeys.join('\n'));
+        } else if (data.config.groqKey) {
           setIncludeGroq(true);
-          setGroqKey(data.config.groqKey);
+          setGroqKeys(data.config.groqKey);
         } else {
           setIncludeGroq(false);
-          setGroqKey('');
+          setGroqKeys('');
         }
 
         if (data.config.supabaseUrl) {
@@ -129,9 +135,13 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
       return;
     }
     
-    // Validation: If checked, must have value
-    if (includeGemini && !geminiKey) { alert("Gemini Key dipilih tapi kosong!"); return; }
-    if (includeGroq && !groqKey) { alert("Groq Key dipilih tapi kosong!"); return; }
+    // Process Arrays
+    const geminiArray = includeGemini ? geminiKeys.split('\n').map(k => k.trim()).filter(k => k.length > 5) : [];
+    const groqArray = includeGroq ? groqKeys.split('\n').map(k => k.trim()).filter(k => k.length > 5) : [];
+
+    // Validation
+    if (includeGemini && geminiArray.length === 0) { alert("Gemini Key dipilih tapi kosong!"); return; }
+    if (includeGroq && groqArray.length === 0) { alert("Groq Key dipilih tapi kosong!"); return; }
     if (includeSupabase && (!supabaseUrl || !supabaseKey)) { alert("Supabase config tidak lengkap!"); return; }
 
     try {
@@ -142,8 +152,12 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
           expires_at: Date.now() + (expiryDays * 24 * 60 * 60 * 1000),
         },
         config: {
-          geminiKey: includeGemini ? geminiKey : undefined,
-          groqKey: includeGroq ? groqKey : undefined,
+          geminiKeys: geminiArray.length > 0 ? geminiArray : undefined,
+          groqKeys: groqArray.length > 0 ? groqArray : undefined,
+          // Support Legacy fields for backward compatibility, use first key
+          geminiKey: geminiArray.length > 0 ? geminiArray[0] : undefined,
+          groqKey: groqArray.length > 0 ? groqArray[0] : undefined,
+          
           preferredProvider: includeGemini ? 'gemini' : 'groq', 
           supabaseUrl: includeSupabase ? supabaseUrl : undefined,
           supabaseKey: includeSupabase ? supabaseKey : undefined
@@ -161,8 +175,7 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       
-      alert(`Kartu .mikir untuk "${owner}" berhasil disimpan!`);
-      // Optional: Don't close immediately so they can issue multiple
+      alert(`Kartu .mikir untuk "${owner}" berhasil disimpan!\nTerdapat ${geminiArray.length} Gemini Keys dan ${groqArray.length} Groq Keys.`);
     } catch (e) {
       alert("Gagal membuat kartu. Cek data kembali.");
     }
@@ -286,10 +299,10 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
               <section className="space-y-4">
                   <div className="flex items-center gap-2 mb-4">
                     <Zap className="text-amber-500" size={18} />
-                    <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Embed API Keys</h3>
+                    <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Embed API Keys (Multi-Line)</h3>
                   </div>
                   <p className="text-xs text-slate-500 mb-4">
-                    Paste key manual untuk User, atau klik ikon <Copy size={10} className="inline" /> untuk ambil dari browser-mu.
+                    Anda dapat memasukkan <b>banyak Key sekaligus</b>. Pisahkan dengan baris baru (Enter). Sistem akan merotasi penggunaan Key secara otomatis.
                   </p>
 
                   {/* Gemini */}
@@ -306,12 +319,12 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
                         )}
                     </div>
                     {includeGemini && (
-                      <input 
-                          type="text" 
-                          value={geminiKey} 
-                          onChange={e => setGeminiKey(e.target.value)} 
-                          placeholder="Paste Gemini API Key for this user..."
-                          className="w-full text-xs p-2 rounded border border-indigo-200 bg-white font-mono text-indigo-800"
+                      <textarea 
+                          value={geminiKeys} 
+                          onChange={e => setGeminiKeys(e.target.value)} 
+                          placeholder="Paste Gemini Keys here (one per line)..."
+                          rows={4}
+                          className="w-full text-xs p-2 rounded border border-indigo-200 bg-white font-mono text-indigo-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                       />
                     )}
                   </div>
@@ -330,12 +343,12 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
                         )}
                     </div>
                     {includeGroq && (
-                      <input 
-                          type="text" 
-                          value={groqKey} 
-                          onChange={e => setGroqKey(e.target.value)} 
-                          placeholder="Paste Groq API Key for this user..."
-                          className="w-full text-xs p-2 rounded border border-orange-200 bg-white font-mono text-orange-800"
+                      <textarea 
+                          value={groqKeys} 
+                          onChange={e => setGroqKeys(e.target.value)} 
+                          placeholder="Paste Groq API Keys here (one per line)..."
+                          rows={4}
+                          className="w-full text-xs p-2 rounded border border-orange-200 bg-white font-mono text-orange-800 focus:outline-none focus:ring-1 focus:ring-orange-500"
                       />
                     )}
                   </div>

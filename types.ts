@@ -4,12 +4,13 @@ export enum QuizState {
   PROCESSING = 'PROCESSING',
   QUIZ_ACTIVE = 'QUIZ_ACTIVE',
   RESULTS = 'RESULTS',
-  ERROR = 'ERROR'
+  ERROR = 'ERROR',
+  CHALLENGE_LANDING = 'CHALLENGE_LANDING' // New State
 }
 
 export enum AppView {
   GENERATOR = 'GENERATOR',
-  HISTORY = 'HISTORY',
+  WORKSPACE = 'WORKSPACE', 
   SETTINGS = 'SETTINGS',
   VIRTUAL_ROOM = 'VIRTUAL_ROOM'
 }
@@ -18,7 +19,8 @@ export enum QuizMode {
   STANDARD = 'STANDARD',
   SCAFFOLDING = 'SCAFFOLDING', 
   TIME_RUSH = 'TIME_RUSH',     
-  SURVIVAL = 'SURVIVAL'        
+  SURVIVAL = 'SURVIVAL',
+  CHALLENGE = 'CHALLENGE' // New Mode
 }
 
 export enum ExamStyle {
@@ -28,14 +30,22 @@ export enum ExamStyle {
   COMPETITIVE = 'COMPETITIVE'  
 }
 
+// --- NEW QUESTION TYPES ---
+export type QuestionType = 'MULTIPLE_CHOICE' | 'TRUE_FALSE' | 'FILL_BLANK';
+
 export interface Question {
   id: number;
+  type?: QuestionType; // Defaults to MULTIPLE_CHOICE
   text: string;
-  options: string[];
-  correctIndex: number;
+  options: string[]; 
+  correctIndex: number; 
+  correctAnswer?: string; // For FillBlank (String matching)
+  proposedAnswer?: string; // NEW: For True/False (e.g. "Apakah ibukota Jabar adalah [Surabaya]?")
   explanation: string;
   keyPoint: string; 
   difficulty: 'Easy' | 'Medium' | 'Hard';
+  isReview?: boolean;
+  originalId?: number;
 }
 
 export interface SRSData {
@@ -53,7 +63,19 @@ export interface QuizResult {
   totalQuestions: number;
   score: number;
   mode: QuizMode;
-  answers: { questionId: number; selectedIndex: number; isCorrect: boolean }[];
+  answers: { questionId: number; selectedIndex: number; textAnswer?: string; isCorrect: boolean }[];
+  challengeId?: string; // Link to challenge if applicable
+}
+
+export interface ChallengeData {
+  id: string;
+  creatorName: string;
+  topic: string;
+  questions: Question[];
+  creatorScore: number;
+  challengerName?: string;
+  challengerScore?: number;
+  created_at: string;
 }
 
 export interface SkillAnalysis {
@@ -64,12 +86,21 @@ export interface SkillAnalysis {
   analysis: string; 
 }
 
+export interface LibraryItem {
+  id: string | number;
+  title: string;
+  content: string; 
+  type: 'pdf' | 'text' | 'note';
+  tags: string[];
+  created_at: string;
+}
+
 export interface CloudNote {
-  id: string | number; // Updated to support UUID/Text IDs from neuro_notes
-  title: string;       // Mapped from 'topic'
+  id: string | number; 
+  title: string;       
   content: string;
-  created_at: string;  // Mapped from 'timestamp'
-  tags?: string[];     // Mapped from 'mode' + 'provider'
+  created_at: string;  
+  tags?: string[];     
 }
 
 export type AiProvider = 'gemini' | 'groq';
@@ -84,8 +115,10 @@ export interface KeycardData {
     valid_domain?: string;
   };
   config: {
-    geminiKey?: string;
-    groqKey?: string;
+    geminiKey?: string; 
+    geminiKeys?: string[]; 
+    groqKey?: string; 
+    groqKeys?: string[]; 
     preferredProvider?: AiProvider;
     supabaseUrl?: string;
     supabaseKey?: string;
@@ -100,6 +133,10 @@ export interface ModelConfig {
   mode: QuizMode;
   examStyle: ExamStyle;
   topic?: string; 
+  customPrompt?: string; 
+  libraryContext?: string;
+  enableRetention?: boolean;
+  enableMixedTypes?: boolean; // New: Toggle for True/False & FillBlank
 }
 
 export interface ModelOption {
@@ -110,17 +147,13 @@ export interface ModelOption {
 }
 
 export const AVAILABLE_MODELS: ModelOption[] = [
-  // --- GOOGLE GEMINI MODELS ---
-  { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash (Standard)", provider: 'gemini', isVision: true },
-  { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite (Fastest)", provider: 'gemini', isVision: true },
-  { id: "gemini-3-flash-preview", label: "Gemini 3 Flash (High IQ)", provider: 'gemini', isVision: true },
-  { id: "gemma-3-27b-it", label: "Gemma 3 27B (Deep Reasoning)", provider: 'gemini', isVision: true },
-  
-  // --- GROQ PRODUCTION MODELS ---
+  { id: "gemini-2.0-flash", label: "Gemini 2.0 Flash (Fast & Smart)", provider: 'gemini', isVision: true },
+  { id: "gemini-2.0-flash-lite-preview-02-05", label: "Gemini 2.0 Flash Lite (Super Fast)", provider: 'gemini', isVision: true },
+  { id: "gemini-2.0-pro-exp-02-05", label: "Gemini 2.0 Pro (Reasoning)", provider: 'gemini', isVision: true },
+  { id: "gemini-1.5-pro", label: "Gemini 1.5 Pro (Legacy Stable)", provider: 'gemini', isVision: true },
+  { id: "gemma-2-27b-it", label: "Gemma 2 27B (Open Model)", provider: 'gemini' },
   { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B (Versatile)", provider: 'groq' },
   { id: "llama-3.1-8b-instant", label: "Llama 3.1 8B (Instant)", provider: 'groq' },
-  { id: "openai/gpt-oss-120b", label: "GPT-OSS 120B (Flagship)", provider: 'groq' },
-  
-  // --- GROQ PREVIEW MODELS ---
-  { id: "meta-llama/llama-4-maverick-17b-128e-instruct", label: "Llama 4 Maverick 17B (Preview)", provider: 'groq' },
+  { id: "mixtral-8x7b-32768", label: "Mixtral 8x7B", provider: 'groq' },
+  { id: "gemma2-9b-it", label: "Gemma 2 9B (Groq)", provider: 'groq' },
 ];

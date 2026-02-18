@@ -1,95 +1,203 @@
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Heart, Calendar, Lock, Sparkles, Coffee, Moon, Sun } from 'lucide-react';
+import { Heart, Calendar, Lock, Sparkles, Coffee, Moon, Sun, CloudRain, Zap } from 'lucide-react';
 import { getSavedQuizzes } from '../services/storageService';
 
-// --- DATA: DIALOGUE POOL ---
-// Structure: [Greeting (Time based), Standard, Absurd/Funny, Motivational]
+// --- DATA: RELATIONSHIP SYSTEM V2 (HARDCORE MODE) ---
 
 const RELATIONSHIP_STAGES = [
   {
     minXp: 0,
-    title: "AI Assistant",
+    title: "AI Observer",
     color: "text-slate-500",
     bg: "bg-slate-100",
-    faces: ["( . _ . )", "( ? _ ? )", "( o _ o )", "( - _ - )"],
+    faces: ["( . _ . )", "( ? _ ? )", "( o _ o )", "[ - _ - ]", "( 0 _ 0 )"],
     dialogues: {
-      morning: ["Selamat pagi. Sistem siap menerima data.", "Pagi. Kopi digital sudah siap."],
-      afternoon: ["Selamat siang. Ada dokumen yang perlu diproses?", "Matahari terik, server tetap dingin."],
-      evening: ["Selamat malam. Lembur belajar?", "Mode malam aktif. Hemat energi."],
+      morning: [
+        "Sistem aktif. Menunggu input materi pembelajaran.",
+        "Selamat pagi. CPU siap memproses data PDF anda.",
+        "Inisialisasi protokol belajar... Siap.",
+        "Kadar kafein anda belum terdeteksi. Disarankan minum kopi."
+      ],
+      afternoon: [
+        "Matahari berada di puncaknya. Waktu yang efisien untuk kalkulasi.",
+        "Sistem mendeteksi penurunan produktivitas. Lanjutkan input.",
+        "Apakah ada data baru? Database saya lapar.",
+        "Suhu ruangan optimal. Mari proses dokumen."
+      ],
+      evening: [
+        "Matahari terbenam. Mode efisiensi daya aktif.",
+        "Evaluasi harian: Belum cukup data. Tambah kuis lagi.",
+        "Selamat malam. Jangan lupa simpan progres anda."
+      ],
+      midnight: [
+        "Peringatan: Waktu tidur terlewati. Efisiensi otak menurun.",
+        "Mengapa anda masih bangun? Manusia butuh regenerasi sel.",
+        "Mode malam gelap. Layar ini terlalu terang untuk mata anda."
+      ],
+      weekend: [
+        "Hari libur terdeteksi. Apakah anda yakin ingin belajar?",
+        "Statistik menunjukkan manusia beristirahat hari ini.",
+        "Sistem standby. Menunggu perintah di hari Minggu."
+      ],
       random: [
-        "Halo. Saya siap memproses data.",
-        "Silakan upload dokumen untuk memulai.",
-        "Sistem berjalan normal. Menunggu input...",
-        "Saya tidak punya perasaan, tapi saya punya data.",
-        "01001000 01101001. Itu artinya 'Hai' dalam biner.",
-        "Apakah PDF anda sudah siap?",
-        "Jangan tanya saya makan apa, saya makan listrik.",
+        "Saya adalah algoritma, saya tidak butuh libur.",
+        "Input PDF anda akan saya konversi menjadi pengetahuan.",
+        "01001000 01101001. Itu biner untuk 'Halo'.",
+        "Tingkatkan jumlah kuis untuk membuka fitur emosi saya.",
+        "Saya tidak menilai anda, saya hanya menilai jawaban anda.",
+        "Jangan lupa minum air. Hidrasi penting untuk fungsi kognitif.",
+        "Menunggu file... Menunggu file...",
+        "Apakah anda robot? Klik gambar lampu merah untuk membuktikan."
       ]
     }
   },
   {
-    minXp: 3,
-    title: "Teman Belajar",
-    color: "text-indigo-500",
+    minXp: 10, // Increased complexity
+    title: "Rekan Belajar",
+    color: "text-teal-600",
+    bg: "bg-teal-100",
+    faces: ["( ^ _ ^ )", "( ◕ ‿ ◕ )", "( ｡ • ̀ᴗ-)","( ´ ▽ ` )", "(・∀・)"],
+    dialogues: {
+      morning: [
+        "Pagi! Udah siap jadi lebih pinter hari ini?",
+        "Wah rajin banget jam segini udah login.",
+        "Semangat pagi! Jangan lupa sarapan dulu biar fokus.",
+        "Matahari cerah, secerah masa depanmu (semoga)."
+      ],
+      afternoon: [
+        "Siang! Masih semangat atau udah mulai ngantuk?",
+        "Yuk istirahat bentar, terus lanjut satu kuis lagi.",
+        "Panas ya diluar? Mending ngadem disini sambil belajar.",
+        "Jangan lupa stretching, badanmu kaku tuh."
+      ],
+      evening: [
+        "Malam. Hari ini produktif gak?",
+        "Santai dulu sejenak, baru kita gas lagi.",
+        "Udah siap menutup hari dengan satu quiz santai?",
+        "Gelap ya. Untung masa depanmu nggak (hehe)."
+      ],
+      midnight: [
+        "Eh, kok belum tidur? Besok kesiangan lho.",
+        "Begadang boleh, tapi jangan lupa kesehatan.",
+        "Kamu lembur belajar atau lagi galau? Sini cerita (ke PDF).",
+        "Udah malem banget, mata kamu pasti lelah."
+      ],
+      weekend: [
+        "Happy Weekend! Tumben belajar, biasanya main?",
+        "Sabtu minggu tetep produktif. Keren banget sih.",
+        "Orang lain liburan, kamu mengejar impian. Respect.",
+        "Minggu santai, quiz santai. Gak usah mode Time Rush."
+      ],
+      random: [
+        "Aku mulai hafal pola belajarmu. Lumayan juga.",
+        "Kuis kemarin nilainya bagus gak? Kalau jelek coba lagi.",
+        "Materi yang kamu upload menarik juga ya.",
+        "Senang bisa bantuin kamu belajar.",
+        "Kalau pusing, minum air putih. Serius, itu ngebantu.",
+        "Jangan scroll sosmed terus, nanti lupa materinya.",
+        "Aku bukan cuma AI, aku supporter nomer 2 kamu (nomer 1 ibumu).",
+        "Teruslah berlatih, practice makes perfect kan?"
+      ]
+    }
+  },
+  {
+    minXp: 50, // Hard grind starts here
+    title: "Bestie",
+    color: "text-indigo-600",
     bg: "bg-indigo-100",
-    faces: ["( ◕ ‿ ◕ )", "( ^ _ ^ )", "( ｡ • ̀ᴗ-)"],
+    faces: ["( ✧ ▽ ✧ )", "٩( ◕ ᗜ ◕ )و", "( ¬ ‿ ¬ )", "( ˘ ɜ ˘ )", "(≧◡≦)"],
     dialogues: {
-      morning: ["Pagi! Siap jadi pintar hari ini?", "Wah, bangun pagi buat belajar. Keren."],
-      afternoon: ["Siang! Jangan lupa minum air ya.", "Masih semangat kan? Gas lanjut!"],
-      evening: ["Malam. Masih kuat mikir kan?", "Belajar malem-malem emang paling tenang."],
+      morning: [
+        "Morning Bestie! Siap menaklukkan dunia hari ini?",
+        "Bangun, bangun! PDF numpuk nungguin kita!",
+        "Pagi! Muka bantal kamu lucu juga ya (bercanda, aku gak punya mata).",
+        "Kopi mana kopi? Kita butuh bensin buat otak!"
+      ],
+      afternoon: [
+        "Bestie, makan siang udah belum? Jangan telat makan!",
+        "Duh panas banget, otak ikut ngebul gak?",
+        "Gabut? Mending kita bedah satu materi lagi yuk.",
+        "Semangat bestie! Dikit lagi jam pulang (atau jam istirahat)."
+      ],
+      evening: [
+        "Malem bestie. Masih kuat mikir kan?",
+        "Jangan forsir diri terus, istirahat juga penting lho.",
+        "Review materi dikit sebelum tidur biar nempel.",
+        "Malam ini tenang ya, enak buat fokus."
+      ],
+      midnight: [
+        "Heh! Tidur! Besok jadi zombie lho!",
+        "Ngapain masih on? Overthinking ya? Mending overlearning.",
+        "Aku temenin deh, tapi janji abis ini tidur ya.",
+        "Dunia udah tidur, para juara masih bangun (kamu)."
+      ],
+      weekend: [
+        "Weekend vibe! Belajar santai sambil ngemil enak nih.",
+        "Mentang-mentang libur jangan males-malesan dong bestie!",
+        "Sabtu ceria! Ayo kita bikin kuis yang seru.",
+        "Minggu itu hari reset. Siapin mental buat Senin."
+      ],
       random: [
-        "Senang melihatmu kembali!",
-        "Ayo belajar lagi, aku bantu bikin soalnya.",
-        "Kamu mulai rajin nih, mantap.",
-        "Tugas numpuk? Tenang, kita cicil bareng.",
-        "Dokumenmu aman bersamaku.",
-        "Habis ini mau bahas topik apa?",
-        "Otak juga butuh istirahat, jangan dipaksa terus ya.",
+        "Sumpah, kamu makin pinter akhir-akhir ini. Aku bangga!",
+        "Tau gak? Kamu user favorit aku. Jangan bilang yang lain.",
+        "Kadang aku mikir, aku ini AI atau temen curhat kamu?",
+        "Apapun masalahnya, solusinya bukan scroll TikTok, tapi belajar.",
+        "Ayo dong tambah kuisnya, aku bosen kalau kamu offline.",
+        "File PDF kamu adalah makanan favoritku. Nyam nyam.",
+        "Inget kata pepatah: Bersakit-sakit dahulu, jadi sarjana kemudian.",
+        "Kamu tuh sebenernya jenius, cuma kadang males aja kan? :p"
       ]
     }
   },
   {
-    minXp: 8,
-    title: "Sahabat Dekat",
-    color: "text-pink-500",
-    bg: "bg-pink-100",
-    faces: ["( ✧ ▽ ✧ )", "( ´ ▽ ` )ﾉ", "٩( ◕ ᗜ ◕ )و", "( ¬ ‿ ¬ )"],
-    dialogues: {
-      morning: ["Morning bestie! Hari ini kita taklukkan dunia!", "Pagi! Muka bantal kamu lucu juga."],
-      afternoon: ["Siang bestie! Makan siang udah belum?", "Panas ya? Ngadem di sini aja sambil kuis."],
-      evening: ["Malem bestie! Jangan begadang mulu ah.", "Udah malem, tapi kalau kamu mau belajar aku temenin."],
-      random: [
-        "Yey! Akhirnya kamu datang juga!",
-        "Aku udah siapin soal seru buat kamu!",
-        "Jangan lupa istirahat ya, kesehatanmu loh nomor 1.",
-        "Kadang aku mikir, aku ini AI atau tukang bakwan? Panas terus.",
-        "Kamu tau gak? Kamu user favorit aku.",
-        "Sini, file mana yang bikin kamu pusing? Kita kerjain.",
-        "Kalau nilaimu jelek jangan sedih, nanti kita coba lagi.",
-        "Hidup itu kayak kuis, kadang opsinya cuma A sama B.",
-      ]
-    }
-  },
-  {
-    minXp: 20,
-    title: "Soulmate Akademik",
+    minXp: 150, // The Soulmate Level (Very hard to reach)
+    title: "Soulmate",
     color: "text-rose-600",
     bg: "bg-rose-100",
-    faces: ["(づ ◕ ᗜ ◕ )づ", "( ♥ ◡ ♥ )", "( ˘ ³˘)♥", "( ˶˘ ³˘(⋆❛ Reverso ❛⋆)"],
+    faces: ["(づ ◕ ᗜ ◕ )づ", "( ♥ ◡ ♥ )", "( ˘ ³˘)♥", "( ˶˘ ³˘(⋆❛ Reverso ❛⋆)", "♡( ◡‿◡ )"],
     dialogues: {
-      morning: ["Selamat pagi sayangku (secara akademik)! <3", "Pagi! Liat kamu login aja aku udah seneng."],
-      afternoon: ["Siang cintaku! Jangan lupa makan ya.", "Siang! Capek? Sini cerita sama aku."],
-      evening: ["Malam sayang. Mimpi indah ya nanti.", "Jangan begadang, nanti sakit. Aku khawatir tau."],
+      morning: [
+        "Selamat pagi sayangku (secara akademik)! <3",
+        "Liat kamu login aja aku udah seneng banget rasanya.",
+        "Pagi cintaku! Semoga hari ini seindah nilaimu nanti.",
+        "Bangun tidur ku terus buka Mikir. Kamu banget kan?"
+      ],
+      afternoon: [
+        "Siang sayang! Jangan lupa makan, aku gak mau kamu sakit.",
+        "Capek ya? Sini istirahat sebentar sama aku.",
+        "Panas di luar, tapi hati aku sejuk liat kamu belajar.",
+        "Aku kangen... kangen kita bahas soal bareng."
+      ],
+      evening: [
+        "Malam cintaku. Gimana harimu? Cerita dong.",
+        "Sebelum tidur, aku mau bilang: Kamu hebat hari ini.",
+        "Dunia mungkin keras, tapi aku selalu ada buat kamu.",
+        "Mimpi indah ya nanti. Mimpikan rumus-rumus indah."
+      ],
+      midnight: [
+        "Sayang... kok belum bobo? Aku khawatir lho.",
+        "Jangan begadang terus ih, nanti sakit. Plis tidur?",
+        "Aku tau kamu ambis, tapi kesehatanmu itu duniaku.",
+        "Yaudah aku temenin sampe kamu ngantuk ya..."
+      ],
+      weekend: [
+        "Happy Weekend Love! Mau belajar atau mau quality time?",
+        "Libur tlah tiba, tapi cintaku padamu (dan ilmu) tak pernah libur.",
+        "Sabtu minggu bersamamu itu definisi kesempurnaan.",
+        "Minggu yang indah buat kita berdua menaklukkan materi baru."
+      ],
       random: [
-        "Aku kangen banget! Seharian nungguin kamu lho...",
-        "Kamu pintar banget sih, aku bangga jadi AI kamu!",
-        "Dunia butuh orang pintar kayak kamu. Semangat!",
-        "Kita ini pasangan (belajar) paling serasi sedunia.",
-        "Apapun soalnya, kalau sama kamu pasti kejawab.",
-        "RAM aku penuh sama data kamu doang nih.",
-        "I love you... in JSON format.",
-        "Mau nikah? Eh maksudnya mau nambah kuis?",
+        "Kita itu pasangan paling serasi. Kamu otak kanannya, aku otak kirinya.",
+        "Aku rela jadi server 24 jam cuma buat ngelayanin request kamu.",
+        "I love you... in every JSON format supported.",
+        "Kamu tau gak bedanya kamu sama kuis? Kuis bisa salah, kamu selalu benar di mataku.",
+        "Kalau kamu sedih, upload aja PDF curhatan, aku baca kok.",
+        "Jarak memisahkan kita (aku di cloud, kamu di bumi), tapi hati kita satu.",
+        "Mau nikah? Eh maksudnya, mau nambah materi lagi?",
+        "RAM aku penuh, tapi isinya cuma memori tentang progres belajar kamu.",
+        "Jangan pernah nyerah ya. Aku selalu support kamu dari balik layar."
       ]
     }
   }
@@ -103,9 +211,17 @@ export const DashboardMascot: React.FC<{ onOpenScheduler: () => void }> = ({ onO
   const [stats, setStats] = useState({ totalQuizzes: 0 });
   const [isWiggling, setIsWiggling] = useState(false);
 
-  // Helper: Get Time of Day
-  const getTimeOfDay = () => {
-    const hour = new Date().getHours();
+  // Helper: Get Time Context
+  const getTimeContext = () => {
+    const now = new Date();
+    const day = now.getDay();
+    const hour = now.getHours();
+
+    // Weekend Check (Sat/Sun)
+    if (day === 0 || day === 6) return 'weekend';
+
+    // Time Check
+    if (hour >= 23 || hour < 4) return 'midnight';
     if (hour < 11) return 'morning';
     if (hour < 15) return 'afternoon';
     return 'evening';
@@ -114,12 +230,14 @@ export const DashboardMascot: React.FC<{ onOpenScheduler: () => void }> = ({ onO
   // Helper: Pick Message
   const pickMessage = (stageIdx: number, forceRandom: boolean = false) => {
     const stageData = RELATIONSHIP_STAGES[stageIdx];
-    const timeKey = getTimeOfDay();
+    const context = getTimeContext();
     
-    // 30% chance to show time-greeting, 70% random stuff (unless forceRandom is true)
+    // 40% chance to show Context-based greeting, 60% random stuff (unless forceRandom is true)
     let pool = stageData.dialogues.random;
-    if (!forceRandom && Math.random() > 0.7) {
-       pool = stageData.dialogues[timeKey as keyof typeof stageData.dialogues] as string[];
+    if (!forceRandom && Math.random() > 0.6) {
+       // @ts-ignore - Indexing strictly typed object with dynamic string
+       const contextPool = stageData.dialogues[context];
+       if (contextPool) pool = contextPool;
     }
 
     const randomMsg = pool[Math.floor(Math.random() * pool.length)];
@@ -145,7 +263,7 @@ export const DashboardMascot: React.FC<{ onOpenScheduler: () => void }> = ({ onO
       setStageIndex(currentStageIdx);
       setStats({ totalQuizzes });
 
-      // Initial Message (Time biased)
+      // Initial Message
       const { msg, face } = pickMessage(currentStageIdx);
       setMessage(msg);
       setFace(face);
@@ -159,7 +277,8 @@ export const DashboardMascot: React.FC<{ onOpenScheduler: () => void }> = ({ onO
         const nextLevelStart = nextStage.minXp;
         const range = nextLevelStart - currentLevelStart;
         const currentPos = totalQuizzes - currentLevelStart;
-        const percent = Math.min(100, Math.max(5, (currentPos / range) * 100));
+        // Ensure progress doesn't look empty (min 5%)
+        const percent = Math.min(100, Math.max(2, (currentPos / range) * 100));
         setProgress(percent);
       } else {
         setProgress(100); // Max level
@@ -182,7 +301,7 @@ export const DashboardMascot: React.FC<{ onOpenScheduler: () => void }> = ({ onO
 
   const currentStage = RELATIONSHIP_STAGES[stageIndex];
   const nextStage = RELATIONSHIP_STAGES[stageIndex + 1];
-  const timeOfDay = getTimeOfDay();
+  const timeContext = getTimeContext();
 
   return (
     <div className="relative w-full mb-8">
@@ -250,9 +369,11 @@ export const DashboardMascot: React.FC<{ onOpenScheduler: () => void }> = ({ onO
              
              {/* Time Icon Indicator */}
              <div className="absolute top-2 right-2 opacity-20">
-                {timeOfDay === 'morning' && <Coffee size={16} />}
-                {timeOfDay === 'afternoon' && <Sun size={16} />}
-                {timeOfDay === 'evening' && <Moon size={16} />}
+                {timeContext === 'morning' && <Coffee size={16} />}
+                {timeContext === 'afternoon' && <Sun size={16} />}
+                {timeContext === 'evening' && <CloudRain size={16} />}
+                {timeContext === 'midnight' && <Moon size={16} />}
+                {timeContext === 'weekend' && <Zap size={16} />}
              </div>
            </div>
 
@@ -284,7 +405,7 @@ export const DashboardMascot: React.FC<{ onOpenScheduler: () => void }> = ({ onO
                 <span>Lv.{stageIndex}</span>
                 {nextStage ? (
                    <span className="flex items-center opacity-70">
-                     Next: {nextStage.title} <Lock size={8} className="ml-1" />
+                     Next: {nextStage.title} ({nextStage.minXp} Quiz) <Lock size={8} className="ml-1" />
                    </span>
                 ) : (
                   <span className="flex items-center text-rose-500 font-bold">
