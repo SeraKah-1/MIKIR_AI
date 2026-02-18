@@ -10,11 +10,11 @@ import { HistoryScreen } from './components/HistoryScreen';
 import { VirtualRoom } from './components/VirtualRoom';
 import { Navigation } from './components/Navigation';
 import { LoginGate } from './components/LoginGate'; 
-import { UniversalQuestionCard } from './components/UniversalQuestionCard'; // NEW
+import { UniversalQuestionCard } from './components/UniversalQuestionCard'; 
 
 import { generateQuiz } from './services/geminiService';
 import { generateQuizGroq } from './services/groqService';
-import { transformToMixed } from './services/questionTransformer'; // NEW
+import { transformToMixed, shuffleOptions } from './services/questionTransformer'; 
 import { saveGeneratedQuiz, getApiKey, updateHistoryStats, getSavedQuizzes, deleteQuiz, updateLocalQuizQuestions } from './services/storageService'; 
 import { createRetentionSequence } from './services/srsService'; 
 import { checkAndTriggerNotification } from './services/notificationService';
@@ -120,6 +120,10 @@ const App: React.FC = () => {
              generatedQuestions = transformToMixed(generatedQuestions);
           }
 
+          // --- SHUFFLE OPTIONS (NEW) ---
+          // Ensure options are randomized immediately after generation
+          generatedQuestions = shuffleOptions(generatedQuestions);
+
           // --- APPLY RETENTION LOGIC ---
           setOriginalQuestions(generatedQuestions); // Save pure unique questions
           
@@ -198,6 +202,9 @@ const App: React.FC = () => {
                newQuestions = transformToMixed(newQuestions);
             }
 
+            // --- SHUFFLE OPTIONS ---
+            newQuestions = shuffleOptions(newQuestions);
+
             const maxId = Math.max(...originalQuestions.map(q => q.id), 0);
             const indexedNewQuestions = newQuestions.map((q, i) => ({ ...q, id: maxId + i + 1 }));
             
@@ -226,9 +233,15 @@ const App: React.FC = () => {
   };
 
   const handleImportQuiz = (file: File) => { /* ... same as before ... */ };
+  
   const handleLoadHistory = (savedQuiz: any) => {
-    setQuestions(savedQuiz.questions);
-    setOriginalQuestions(savedQuiz.questions);
+    // FIX: DO NOT SHUFFLE AGAIN ON LOAD
+    // Previously: const freshQuestions = shuffleOptions(savedQuiz.questions);
+    // This caused answer keys to desync with user memory/history if options changed positions.
+    const freshQuestions = savedQuiz.questions;
+    
+    setQuestions(freshQuestions);
+    setOriginalQuestions(freshQuestions);
     setActiveMode(savedQuiz.mode);
     setActiveQuizId(savedQuiz.id);
     setErrorMsg(null);
@@ -249,9 +262,14 @@ const App: React.FC = () => {
     });
     setCurrentView(AppView.GENERATOR);
   };
+
   const handleStartMixer = (mixedQuestions: Question[]) => {
-     setQuestions(mixedQuestions);
-     setOriginalQuestions(mixedQuestions);
+     // Already handled shuffle/transform in VirtualRoom logic usually, 
+     // but safe to ensure options are randomized here too.
+     const mixedAndShuffled = shuffleOptions(mixedQuestions);
+     
+     setQuestions(mixedAndShuffled);
+     setOriginalQuestions(mixedAndShuffled);
      setActiveMode(QuizMode.STANDARD);
      setActiveQuizId(null); 
      setErrorMsg(null);
@@ -266,13 +284,15 @@ const App: React.FC = () => {
      setQuizState(QuizState.PROCESSING);
      
      setTimeout(() => {
-        // Transform (Change Types + Shuffle Options logic inside)
-        // Note: transformToMixed creates new objects but keeps IDs. 
-        // We might want to shuffle the order of questions too.
-        const mixed = transformToMixed(sourceQuestions).sort(() => Math.random() - 0.5);
+        // 1. Transform types (MCQ <-> T/F)
+        // 2. Shuffle Options (Position)
+        // 3. Shuffle Order
+        const mixed = transformToMixed(sourceQuestions);
+        const shuffledOptions = shuffleOptions(mixed);
+        const finalMix = shuffledOptions.sort(() => Math.random() - 0.5);
         
-        setQuestions(mixed);
-        setOriginalQuestions(mixed); // Update source of truth for this session
+        setQuestions(finalMix);
+        setOriginalQuestions(finalMix); 
         setResult(null);
         setQuizState(QuizState.QUIZ_ACTIVE);
      }, 500);
@@ -302,14 +322,20 @@ const App: React.FC = () => {
     // Filter from 'questions' (which might contain repeats with unique IDs)
     const mistakesToRetry = questions.filter(q => wrongQuestionIds.includes(q.id));
     
-    if (mistakesToRetry.length > 0) { setQuestions(mistakesToRetry); setResult(null); setQuizState(QuizState.QUIZ_ACTIVE); }
+    // Shuffle options again for retry!
+    const reshuffledMistakes = shuffleOptions(mistakesToRetry);
+    
+    if (reshuffledMistakes.length > 0) { setQuestions(reshuffledMistakes); setResult(null); setQuizState(QuizState.QUIZ_ACTIVE); }
   };
+
   const handleRetryAll = () => { 
-      // Retry the exact same session sequence
-      setQuestions(questions); 
+      // Retry the exact same session sequence, BUT reshuffle options so they don't memorize "Answer is A"
+      const reshuffledQuestions = shuffleOptions(questions);
+      setQuestions(reshuffledQuestions); 
       setResult(null); 
       setQuizState(QuizState.QUIZ_ACTIVE); 
   };
+
   const handleContinueQuiz = () => { if (questions.length > 0) setQuizState(QuizState.QUIZ_ACTIVE); };
   const resetApp = () => {
     setQuestions([]); setOriginalQuestions([]); setResult(null); setErrorMsg(null); setActiveQuizId(null); setLastConfig(null); setQuizState(QuizState.CONFIG);
@@ -348,7 +374,7 @@ const App: React.FC = () => {
               onRetryAll={handleRetryAll}
               onDelete={activeQuizId ? handleDeleteActiveQuiz : undefined}
               onAddMore={lastConfig ? handleAddMoreQuestions : undefined}
-              onRemix={handleRemix} // Pass the handler
+              onRemix={handleRemix} 
             />
         );
     }

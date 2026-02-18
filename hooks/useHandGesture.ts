@@ -30,6 +30,7 @@ export const useHandGesture = (
   const lastGestureRef = useRef<string | null>(null);
   const gestureStartTimeRef = useRef<number>(0);
   const hasTriggeredRef = useRef<boolean>(false);
+  const lastVideoTimeRef = useRef<number>(-1);
 
   // --- 1. LOAD MEDIAPIPE ---
   useEffect(() => {
@@ -51,7 +52,10 @@ export const useHandGesture = (
             delegate: "GPU"
           },
           runningMode: "VIDEO",
-          numHands: 1
+          numHands: 1,
+          minHandDetectionConfidence: 0.6,
+          minHandPresenceConfidence: 0.6,
+          minTrackingConfidence: 0.6
         });
 
         if (active) {
@@ -70,6 +74,10 @@ export const useHandGesture = (
     return () => {
       active = false;
       stopCamera();
+      if (landmarkerRef.current) {
+          landmarkerRef.current.close();
+          landmarkerRef.current = null;
+      }
     };
   }, []);
 
@@ -81,7 +89,8 @@ export const useHandGesture = (
           video: { 
              width: 320, 
              height: 240,
-             facingMode: "user" 
+             facingMode: "user",
+             frameRate: { ideal: 30 }
           } 
       });
       videoRef.current.srcObject = stream;
@@ -99,58 +108,69 @@ export const useHandGesture = (
     cancelAnimationFrame(requestRef.current);
   };
 
-  // --- 3. DETECTION LOOP ---
+  // --- 3. DETECTION LOOP (THROTTLED) ---
   const predictWebcam = async () => {
     if (!landmarkerRef.current || !videoRef.current || !canvasRef.current) return;
 
     const video = videoRef.current;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-
-    if (video.videoWidth > 0 && video.videoHeight > 0) {
-        // Draw video frame to canvas
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
+    
+    // THROTTLING: Process only if timestamp changed enough (e.g., every 150ms)
+    // currentTime is in seconds.
+    if (video.currentTime !== lastVideoTimeRef.current) {
+        const timeDiff = (video.currentTime - lastVideoTimeRef.current) * 1000;
+        if (timeDiff < 150) { // Limit to ~6-7 FPS for gesture to save battery
+             requestRef.current = requestAnimationFrame(predictWebcam);
+             return;
+        }
+        lastVideoTimeRef.current = video.currentTime;
         
-        // --- DRAW ROI BOX (Lower Right) ---
-        const roiX = canvas.width * 0.25;
-        const roiY = canvas.height * 0.3;
-        const roiW = canvas.width * 0.5;
-        const roiH = canvas.height * 0.7;
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
 
-        let startTimeMs = performance.now();
-        const results = landmarkerRef.current.detectForVideo(video, startTimeMs);
+        if (video.videoWidth > 0 && video.videoHeight > 0) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            
+            // --- DRAW ROI BOX (Lower Right) ---
+            const roiX = canvas.width * 0.25;
+            const roiY = canvas.height * 0.3;
+            const roiW = canvas.width * 0.5;
+            const roiH = canvas.height * 0.7;
 
-        if (ctx) {
-           ctx.clearRect(0, 0, canvas.width, canvas.height);
-           
-           // Visual Feedback for ROI
-           ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
-           ctx.lineWidth = 2;
-           ctx.strokeRect(roiX, roiY, roiW, roiH);
-           
-           // Check Hands
-           if (results.landmarks && results.landmarks.length > 0) {
-              const landmarks = results.landmarks[0];
+            let startTimeMs = performance.now();
+            const results = landmarkerRef.current.detectForVideo(video, startTimeMs);
+
+            if (ctx) {
+              ctx.clearRect(0, 0, canvas.width, canvas.height);
               
-              // --- 1. Check ROI ---
-              const wrist = landmarks[0];
-              const inROI = (wrist.x * canvas.width > roiX) && 
-                            (wrist.x * canvas.width < roiX + roiW) &&
-                            (wrist.y * canvas.height > roiY);
+              // Visual Feedback for ROI (Subtler)
+              ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
+              ctx.lineWidth = 1;
+              ctx.strokeRect(roiX, roiY, roiW, roiH);
+              
+              // Check Hands
+              if (results.landmarks && results.landmarks.length > 0) {
+                  const landmarks = results.landmarks[0];
+                  
+                  // --- 1. Check ROI ---
+                  const wrist = landmarks[0];
+                  const inROI = (wrist.x * canvas.width > roiX) && 
+                                (wrist.x * canvas.width < roiX + roiW) &&
+                                (wrist.y * canvas.height > roiY);
 
-              // Draw Skeleton
-              drawHand(ctx, landmarks, inROI ? '#10b981' : '#f43f5e');
+                  // Draw Skeleton (Optimized colors)
+                  drawHand(ctx, landmarks, inROI ? '#34d399' : '#f43f5e');
 
-              if (inROI && !isPaused) {
-                 const gesture = recognizeGesture(landmarks);
-                 handleDwellTime(gesture);
+                  if (inROI && !isPaused) {
+                    const gesture = recognizeGesture(landmarks);
+                    handleDwellTime(gesture);
+                  } else {
+                    resetDwell();
+                  }
               } else {
-                 resetDwell();
+                  resetDwell();
               }
-           } else {
-              resetDwell();
-           }
+            }
         }
     }
     
@@ -160,9 +180,10 @@ export const useHandGesture = (
   // --- 4. GESTURE RECOGNITION MATH ---
   const recognizeGesture = (landmarks: any[]) => {
       // Finger Tips: 4 (Thumb), 8 (Index), 12 (Middle), 16 (Ring), 20 (Pinky)
+      // Finger PIP (Joint 2): 6, 10, 14, 18
       
       const isFingerUp = (tipIdx: number, pipIdx: number) => {
-         // Check TIP against PIP (Joint 2) and MCP (Joint 1) for stability
+         // Check TIP against PIP (Joint 2) for stability
          return landmarks[tipIdx].y < landmarks[pipIdx].y; 
       };
 
@@ -173,30 +194,15 @@ export const useHandGesture = (
 
       const count = (indexUp?1:0) + (middleUp?1:0) + (ringUp?1:0) + (pinkyUp?1:0);
 
-      // Thumb Analysis
       const thumbTip = landmarks[4];
-      const thumbIP = landmarks[3];
       const thumbMCP = landmarks[2];
-      const pinkyMCP = landmarks[17];
-      
-      // Thumb Up: Tip is significantly higher than MCP
       const isThumbUp = thumbTip.y < thumbMCP.y; 
       
-      // --- LOGIC MAP ---
-
-      // "BACK" (Open Palm): 
-      // 4 Fingers UP + Thumb Extended/Up (Count is 4 fingers excluding thumb)
       if (count === 4 && isThumbUp) return "BACK";
-
-      // "NEXT" (Thumbs Up):
-      // Fingers curled (count <= 1) AND Thumb pointing UP.
       if (count <= 1 && isThumbUp) return "NEXT";
-
-      // Numbers
       if (count === 1 && indexUp) return "1";
       if (count === 2 && indexUp && middleUp) return "2";
       if (count === 3 && indexUp && middleUp && ringUp) return "3";
-      // "4": 4 Fingers UP + Thumb Tucked
       if (count === 4 && !isThumbUp) return "4";
       
       return null;
@@ -205,24 +211,28 @@ export const useHandGesture = (
   // --- 5. DWELL TIME LOGIC ---
   const handleDwellTime = (gesture: string | null) => {
      const now = performance.now();
-     const DWELL_DURATION = 800; // Reduced from 1200ms to make input feel responsive
+     const DWELL_DURATION = 1600; 
      
-     if (gesture === lastGestureRef.current) {
+     if (gesture && gesture === lastGestureRef.current) {
         const duration = now - gestureStartTimeRef.current;
         const progress = Math.min(100, (duration / DWELL_DURATION) * 100); 
         
         setState(prev => ({ ...prev, detectedGesture: gesture, dwellProgress: progress }));
 
-        if (duration > DWELL_DURATION && !hasTriggeredRef.current && gesture) {
+        if (duration > DWELL_DURATION && !hasTriggeredRef.current) {
            onTrigger(gesture);
            hasTriggeredRef.current = true;
-           if (navigator.vibrate) navigator.vibrate(50);
+           if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(50);
         }
      } else {
         lastGestureRef.current = gesture;
         gestureStartTimeRef.current = now;
         hasTriggeredRef.current = false;
-        setState(prev => ({ ...prev, detectedGesture: gesture, dwellProgress: 0 }));
+        setState(prev => ({ 
+            ...prev, 
+            detectedGesture: gesture, 
+            dwellProgress: 0 
+        }));
      }
   };
 
@@ -232,19 +242,10 @@ export const useHandGesture = (
      setState(prev => ({ ...prev, detectedGesture: null, dwellProgress: 0 }));
   };
 
-  // --- HELPER: DRAW HAND ---
   const drawHand = (ctx: CanvasRenderingContext2D, landmarks: any[], color: string) => {
-      ctx.fillStyle = color;
       ctx.strokeStyle = color;
       ctx.lineWidth = 2;
-
-      for (const point of landmarks) {
-          const x = point.x * ctx.canvas.width;
-          const y = point.y * ctx.canvas.height;
-          ctx.beginPath();
-          ctx.arc(x, y, 3, 0, 2 * Math.PI);
-          ctx.fill();
-      }
+      ctx.beginPath();
 
       const connections = [
           [0, 1], [1, 2], [2, 3], [3, 4], 
@@ -257,11 +258,10 @@ export const useHandGesture = (
       for (const [start, end] of connections) {
           const p1 = landmarks[start];
           const p2 = landmarks[end];
-          ctx.beginPath();
           ctx.moveTo(p1.x * ctx.canvas.width, p1.y * ctx.canvas.height);
           ctx.lineTo(p2.x * ctx.canvas.width, p2.y * ctx.canvas.height);
-          ctx.stroke();
       }
+      ctx.stroke();
   };
 
   return { videoRef, canvasRef, ...state };

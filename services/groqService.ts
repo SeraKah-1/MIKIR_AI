@@ -75,6 +75,10 @@ export const extractPdfText = async (file: File, onProgress?: (p: string) => voi
 
     for (let i = 1; i <= maxPages; i++) {
       if (onProgress) onProgress(`${file.name}: Hal ${i}/${maxPages}`);
+      
+      // YIELD TO MAIN THREAD: Prevent UI Freeze on heavy parsing
+      await new Promise(resolve => setTimeout(resolve, 0));
+
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
       const pageText = textContent.items.map((item: any) => item.str).join(" ");

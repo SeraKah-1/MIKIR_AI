@@ -3,15 +3,17 @@
  * ==========================================
  * STORAGE SERVICE (Facade)
  * ==========================================
- * Mengatur LocalStorage dan menjembatani ke MikirCloud (Supabase).
+ * Mengatur LocalStorage, IndexedDB (untuk data besar), dan Supabase.
  */
 
 import { Question, ModelConfig, AiProvider, StorageProvider, CloudNote, LibraryItem } from "../types";
 import { MikirCloud } from "./supabaseService"; 
+import { summarizeMaterial } from "./geminiService";
+import { get, set, update } from 'idb-keyval'; // IndexedDB Wrapper
 
 const HISTORY_KEY = 'glassquiz_history';
-const LIBRARY_KEY = 'glassquiz_library'; 
-const GRAVEYARD_KEY = 'glassquiz_graveyard'; // NEW: Kuburan Soal
+const LIBRARY_IDB_KEY = 'glassquiz_library_store'; // Key for IndexedDB
+const GRAVEYARD_KEY = 'glassquiz_graveyard'; 
 const GEMINI_KEY_STORAGE = 'glassquiz_api_key';
 const GEMINI_KEYS_POOL = 'glassquiz_gemini_keys_pool'; 
 const GROQ_KEY_STORAGE = 'glassquiz_groq_key';
@@ -30,24 +32,17 @@ export const getGestureEnabled = (): boolean => {
     return raw ? JSON.parse(raw) : false; 
 };
 
-// --- MISTAKE GRAVEYARD (FEATURE #5) ---
+// --- MISTAKE GRAVEYARD ---
 export const addToGraveyard = (question: Question) => {
   try {
     const raw = localStorage.getItem(GRAVEYARD_KEY);
     let graveyard = raw ? JSON.parse(raw) : [];
-    
-    // Cek duplikasi berdasarkan ID atau Teks (agar hantu tidak kembar)
     const exists = graveyard.find((q: Question) => q.text === question.text);
     if (!exists) {
-      graveyard.unshift({
-        ...question,
-        buriedAt: Date.now() // Timestamp kapan salah
-      });
+      graveyard.unshift({ ...question, buriedAt: Date.now() });
       localStorage.setItem(GRAVEYARD_KEY, JSON.stringify(graveyard));
     }
-  } catch (e) {
-    console.error("Gagal mengubur soal:", e);
-  }
+  } catch (e) { console.error("Gagal mengubur soal:", e); }
 };
 
 export const getGraveyard = (): any[] => {
@@ -68,9 +63,8 @@ export const removeFromGraveyard = (questionId: number) => {
   } catch (e) { console.error("Gagal membangkitkan soal", e); }
 };
 
-// --- API KEY MANAGEMENT (MULTI-KEY ROTATION) ---
+// --- API KEY MANAGEMENT ---
 export const saveApiKey = (provider: AiProvider, key: string) => {
-  // Save as single key (Legacy compatibility)
   if (provider === 'gemini') localStorage.setItem(GEMINI_KEY_STORAGE, key);
   else localStorage.setItem(GROQ_KEY_STORAGE, key);
 };
@@ -82,25 +76,17 @@ export const saveApiKeysPool = (provider: AiProvider, keys: string[]) => {
 };
 
 export const getApiKey = (provider: AiProvider = 'gemini'): string | null => {
-  // 1. Check Pool (Priority: Multi-key rotation)
   const poolKey = provider === 'gemini' ? GEMINI_KEYS_POOL : GROQ_KEYS_POOL;
   const rawPool = localStorage.getItem(poolKey);
-  
   if (rawPool) {
     try {
        const keys = JSON.parse(rawPool);
        if (Array.isArray(keys) && keys.length > 0) {
-          // RANDOM ROTATION: Pick one random key from the pool
-          // This spreads load across keys to avoid hitting rate limits on a single key.
           const randomIndex = Math.floor(Math.random() * keys.length);
           return keys[randomIndex];
        }
-    } catch (e) {
-       console.warn("Failed to parse key pool", e);
-    }
+    } catch (e) { console.warn("Failed to parse key pool", e); }
   }
-
-  // 2. Fallback to Single Key
   if (provider === 'gemini') return localStorage.getItem(GEMINI_KEY_STORAGE);
   else return localStorage.getItem(GROQ_KEY_STORAGE);
 };
@@ -130,110 +116,167 @@ export const getSupabaseConfig = () => {
   return raw ? JSON.parse(raw) : null;
 };
 
-// --- LIBRARY MANAGEMENT (KNOWLEDGE BASE) ---
+// --- LIBRARY MANAGEMENT (Smart Ingest Implementation) ---
 
-export const saveToLibrary = async (title: string, content: string, type: 'pdf' | 'text' | 'note', tags: string[] = []) => {
+export const processAndSaveToLibrary = async (title: string, rawContent: string, type: 'pdf' | 'text' | 'note') => {
+    let processed = "";
+    
+    // Try to summarize using Gemini if Key is available
+    const geminiKey = getApiKey('gemini');
+    
+    if (geminiKey) {
+        try {
+            // Only use heavy model if content justifies it (> 500 chars)
+            if (rawContent.length > 500) {
+                processed = await summarizeMaterial(geminiKey, rawContent);
+            } else {
+                processed = rawContent;
+            }
+        } catch (e) {
+            console.warn("Auto-ingest failed, falling back to raw content", e);
+            processed = rawContent;
+        }
+    } else {
+        processed = rawContent; // Fallback if no key
+    }
+
+    await saveToLibrary(title, rawContent, processed, type);
+};
+
+// Helper to re-process an existing item (e.g. triggered manually)
+export const reprocessLibraryItem = async (item: LibraryItem): Promise<boolean> => {
+    const geminiKey = getApiKey('gemini');
+    if (!geminiKey) return false;
+
+    try {
+        const processed = await summarizeMaterial(geminiKey, item.content);
+        await updateLibraryItem(item.id, { processedContent: processed });
+        return true;
+    } catch (e) {
+        console.error("Reprocess failed", e);
+        return false;
+    }
+};
+
+export const updateLibraryItem = async (id: string | number, updates: Partial<LibraryItem>) => {
+    // 1. Update Local (IndexedDB)
+    try {
+        await update(LIBRARY_IDB_KEY, (val) => {
+            const library = val || [];
+            return library.map((item: LibraryItem) => 
+                String(item.id) === String(id) ? { ...item, ...updates } : item
+            );
+        });
+    } catch(e) { console.error("IDB Update failed", e); }
+
+    // 2. Update Cloud (Using the specific Library Module)
+    const sbConfig = getSupabaseConfig();
+    if (sbConfig) {
+        if (updates.processedContent || updates.content) {
+             await MikirCloud.library.update(sbConfig, id, updates);
+        }
+    }
+};
+
+export const saveToLibrary = async (title: string, content: string, processedContent: string, type: 'pdf' | 'text' | 'note', tags: string[] = []) => {
   const newItem: LibraryItem = {
     id: Date.now().toString(),
     title,
-    content, // We store extracted text, NOT the binary file.
+    content, // Original Raw Text
+    processedContent, // AI Summarized Text (Lightweight)
     type,
     tags,
     created_at: new Date().toISOString()
   };
 
   try {
-    // 1. Local Storage
-    const rawLib = localStorage.getItem(LIBRARY_KEY);
-    const library = rawLib ? JSON.parse(rawLib) : [];
-    
-    // Strict Filter: Ensure we don't duplicate or mix bad data
-    // Only save items that strictly have content
-    if (content.length > 5) {
-        library.unshift(newItem);
-    }
+    // 1. IndexedDB (Primary Local Storage)
+    await update(LIBRARY_IDB_KEY, (val) => {
+        const library = val || [];
+        return [newItem, ...library];
+    });
 
-    try {
-      localStorage.setItem(LIBRARY_KEY, JSON.stringify(library));
-    } catch (e) {
-      alert("Penyimpanan penuh! Hapus materi lama.");
-      return;
-    }
-
-    // 2. Cloud (Supabase)
+    // 2. Cloud (Supabase) - Sync if connected
     const sbConfig = getSupabaseConfig();
     if (sbConfig) {
-       // Mapping to neuro_notes table structure
-       const notePayload = {
-          id: newItem.id,
-          timestamp: Date.now(),
-          topic: newItem.title,
-          content: newItem.content,
-          mode: 'library',
-          provider: newItem.type // storing type in provider col
-       };
-       await MikirCloud.notes.create(sbConfig, notePayload);
+       await MikirCloud.library.create(sbConfig, newItem);
     }
   } catch (err) {
     console.error("Library Save Error:", err);
+    alert("Gagal menyimpan materi. Cek memori browser.");
   }
 };
 
 export const getLibraryItems = async (): Promise<LibraryItem[]> => {
+  let localItems: LibraryItem[] = [];
+  let cloudItems: LibraryItem[] = [];
+
+  // 1. Get Local (IndexedDB)
+  try {
+    localItems = (await get(LIBRARY_IDB_KEY)) || [];
+  } catch (e) { 
+      // Fallback for migration: try localstorage once
+      const rawLib = localStorage.getItem('glassquiz_library');
+      if (rawLib) {
+          localItems = JSON.parse(rawLib);
+          // Migrate to IDB
+          await set(LIBRARY_IDB_KEY, localItems);
+          localStorage.removeItem('glassquiz_library');
+      }
+  }
+
+  // 2. Get Cloud (if config exists)
   const sbConfig = getSupabaseConfig();
-  
-  // Priority: Cloud if available, else Local
   if (sbConfig) {
     try {
-      const notes = await MikirCloud.notes.list(sbConfig);
-      // STRICT FILTERING: Ensure we only return Library Types
-      // This prevents "Quiz History" or other data from polluting the library view
-      return notes
-        .filter(n => ['pdf', 'text', 'note', 'library'].includes((n.tags?.[1] as any) || n.tags?.[0] || ''))
-        .map(n => ({
-            id: n.id,
-            title: n.title,
-            content: n.content,
-            type: (n.tags && n.tags[1] as any) || 'note',
-            tags: n.tags || [],
-            created_at: n.created_at
-      }));
+      cloudItems = await MikirCloud.library.list(sbConfig);
     } catch (e) {
-      console.warn("Cloud fetch failed, falling back to local");
+      console.warn("Cloud fetch failed", e);
     }
   }
 
-  const rawLib = localStorage.getItem(LIBRARY_KEY);
-  if (!rawLib) return [];
+  // 3. MERGE STRATEGY: Combine both, remove duplicates based on ID or approximate matching
+  const uniqueMap = new Map();
   
-  const parsed = JSON.parse(rawLib);
-  // Ensure we only return array
-  return Array.isArray(parsed) ? parsed : [];
+  const addToMap = (item: LibraryItem, isCloud: boolean) => {
+      if (!uniqueMap.has(String(item.id))) {
+          uniqueMap.set(String(item.id), { ...item, isCloudSource: isCloud });
+      } else {
+          // If collision, prefer the one with better content or default to Cloud
+          const existing = uniqueMap.get(String(item.id));
+          if (!existing.processedContent && item.processedContent) {
+              uniqueMap.set(String(item.id), { ...item, isCloudSource: isCloud });
+          }
+      }
+  };
+
+  // Cloud items first (authoritative), then Local
+  cloudItems.forEach(i => addToMap(i, true));
+  localItems.forEach(i => addToMap(i, false));
+
+  return Array.from(uniqueMap.values()).sort((a, b) => 
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
 };
 
 export const deleteLibraryItem = async (id: string | number) => {
-  // Local
-  const rawLib = localStorage.getItem(LIBRARY_KEY);
-  if (rawLib) {
-    const library = JSON.parse(rawLib);
-    const newLib = library.filter((item: LibraryItem) => String(item.id) !== String(id));
-    localStorage.setItem(LIBRARY_KEY, JSON.stringify(newLib));
-  }
+  // Delete from IDB
+  await update(LIBRARY_IDB_KEY, (val) => {
+      const library = val || [];
+      return library.filter((item: LibraryItem) => String(item.id) !== String(id));
+  });
 
-  // Cloud
   const sbConfig = getSupabaseConfig();
   if (sbConfig) {
-    await MikirCloud.notes.delete(sbConfig, id);
+    await MikirCloud.library.delete(sbConfig, id);
   }
 };
 
 // --- WORKSPACE (QUIZ HISTORY) ---
-
 export const saveGeneratedQuiz = async (file: File | null, config: ModelConfig, questions: Question[]) => {
-  // Logic to determine filename: File -> Topic -> Library Context Summary
   let fileName = "Untitled Quiz";
   if (file) fileName = file.name;
-  else if (config.topic) fileName = config.topic.split('\n')[0].substring(0, 50); // Use first line of topic
+  else if (config.topic) fileName = config.topic.split('\n')[0].substring(0, 50); 
   
   const topicSummary = questions.length > 0 ? (questions[0].keyPoint || "General") : "General";
 
@@ -318,17 +361,10 @@ export const updateHistoryStats = async (id: number | string, score: number) => 
 };
 
 // --- CLOUD OPERATIONS ---
-
 export const uploadToCloud = async (quiz: any) => {
   const sbConfig = getSupabaseConfig();
   if (!sbConfig) throw new Error("Supabase belum dikonfigurasi.");
-  
-  const payload = {
-    ...quiz,
-    fileName: quiz.fileName || quiz.file_name,
-    topicSummary: quiz.topicSummary || quiz.topic_summary
-  };
-  
+  const payload = { ...quiz, fileName: quiz.fileName || quiz.file_name, topicSummary: quiz.topicSummary || quiz.topic_summary };
   return await MikirCloud.quiz.create(sbConfig, payload);
 };
 
@@ -356,19 +392,13 @@ export const fetchNotesFromSupabase = async (): Promise<CloudNote[]> => {
   return await MikirCloud.notes.list(sbConfig);
 };
 
-// --- UTILS ---
 export const downloadFromCloud = async (cloudQuiz: any) => {
   try {
     let safeQuestions = cloudQuiz.questions;
     if (typeof safeQuestions === 'string') {
         try { safeQuestions = JSON.parse(safeQuestions); } catch (e) { safeQuestions = []; }
     }
-    const localQuiz = { 
-        ...cloudQuiz, 
-        id: Date.now(), 
-        isCloud: false, 
-        questions: safeQuestions || [] 
-    };
+    const localQuiz = { ...cloudQuiz, id: Date.now(), isCloud: false, questions: safeQuestions || [] };
     const rawHistory = localStorage.getItem(HISTORY_KEY);
     const history = rawHistory ? JSON.parse(rawHistory) : [];
     history.unshift(localQuiz);

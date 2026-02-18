@@ -10,18 +10,44 @@ import { GoogleGenAI } from "@google/genai";
 import { Question, QuizMode, ExamStyle } from "../types";
 
 const cleanAndParseJSON = (rawText: string): any[] => {
-  let text = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
+  // 1. Remove <thinking> tags (Crucial for Gemini 2.0/3.0 Thinking models)
+  let text = rawText.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "").trim();
+
+  // 2. Cleanup Markdown
+  text = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+
+  // 3. Isolate the JSON Array
   const firstOpen = text.indexOf('[');
   const lastClose = text.lastIndexOf(']');
 
-  if (firstOpen === -1 || lastClose === -1) throw new Error("Format JSON invalid.");
+  // 4. Fallback: Check for Object Wrapper
+  if (firstOpen === -1 || lastClose === -1) {
+      const firstBrace = text.indexOf('{');
+      const lastBrace = text.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace !== -1) {
+          try {
+              const potentialObj = JSON.parse(text.substring(firstBrace, lastBrace + 1));
+              for (const key in potentialObj) {
+                  if (Array.isArray(potentialObj[key])) return potentialObj[key];
+              }
+          } catch(e) { /* ignore */ }
+      }
+      throw new Error("Format JSON invalid (Tidak ada Array ditemukan).");
+  }
+
   const jsonContent = text.substring(firstOpen, lastClose + 1);
 
   try {
     return JSON.parse(jsonContent);
   } catch (e) {
-    try { return JSON.parse(jsonContent.replace(/,\s*]/, ']')); } catch (e2) {}
-    throw new Error("Gagal parsing output AI.");
+    try { 
+        // Robust Trailing Comma Fix
+        const fixedContent = jsonContent.replace(/,\s*([\]}])/g, '$1');
+        return JSON.parse(fixedContent); 
+    } catch (e2) {
+        console.error("Mixed Gen Parse Error. Raw:", rawText);
+        throw new Error("Gagal parsing output AI (Mixed Mode).");
+    }
   }
 };
 

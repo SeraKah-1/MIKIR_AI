@@ -1,12 +1,26 @@
 
 /**
  * ==========================================
- * GEMINI AI SERVICE (STRICT MODE + RAG)
+ * GEMINI AI SERVICE (SMART CACHING ARCHITECTURE)
  * ==========================================
  */
 
 import { GoogleGenAI } from "@google/genai";
 import { Question, QuizMode, ExamStyle } from "../types";
+
+// --- CONFIGURATION ---
+
+// Prioritas Model untuk Ingestion (Meringkas). 
+const INGESTION_MODELS = [
+  'gemini-3-pro-preview',     // 1. Frontier Intelligence
+  'gemini-2.5-pro',           // 2. Stable Advanced Thinking
+  'gemini-3-flash-preview',   // 3. Balanced Speed
+  'gemini-2.5-flash',         // 4. Stable Fast
+  'gemini-2.5-flash-lite'     // 5. Ultra Fast Fallback
+];
+
+// Model Cepat untuk "Generation" (Membuat Soal) -> High RPM
+const DEFAULT_GENERATION_MODEL = 'gemini-3-flash-preview';
 
 const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: string; mimeType: string } } | { text: string }> => {
   return new Promise((resolve, reject) => {
@@ -33,19 +47,55 @@ const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: s
 };
 
 const cleanAndParseJSON = (rawText: string): any[] => {
-  let text = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
-  const firstOpen = text.indexOf('[');
-  const lastClose = text.lastIndexOf(']');
+  // 1. Remove <thinking> tags (Crucial for Gemini 2.0/3.0 Thinking models)
+  let text = rawText.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "").trim();
 
-  if (firstOpen === -1 || lastClose === -1) throw new Error("Format JSON invalid.");
-  const jsonContent = text.substring(firstOpen, lastClose + 1);
+  // 2. Cleanup Markdown
+  text = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+
+  // 3. Isolate the JSON Array
+  const firstOpen = text.indexOf('[');
+  let lastClose = text.lastIndexOf(']');
+
+  // 4. Fallback: If no array found, check if it's wrapped in an object
+  if (firstOpen === -1) {
+      const firstBrace = text.indexOf('{');
+      const lastBrace = text.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace !== -1) {
+          try {
+              const potentialObj = JSON.parse(text.substring(firstBrace, lastBrace + 1));
+              for (const key in potentialObj) {
+                  if (Array.isArray(potentialObj[key])) return potentialObj[key];
+              }
+          } catch(e) { /* ignore */ }
+      }
+      throw new Error("Format JSON invalid (Tidak ditemukan Array '[').");
+  }
+
+  // 5. Robust Truncation Fix: If ']' is missing, assume truncation
+  let jsonContent = "";
+  if (lastClose === -1 || lastClose < firstOpen) {
+      // Try to artificially close it
+      jsonContent = text.substring(firstOpen);
+      // Remove trailing comma if exists
+      if (jsonContent.trim().endsWith(',')) jsonContent = jsonContent.trim().slice(0, -1);
+      // Append close bracket
+      jsonContent += ']';
+  } else {
+      jsonContent = text.substring(firstOpen, lastClose + 1);
+  }
 
   try {
     return JSON.parse(jsonContent);
   } catch (e) {
-    // Retry with simple fix for common trailing comma issues
-    try { return JSON.parse(jsonContent.replace(/,\s*]/, ']')); } catch (e2) {}
-    throw new Error("Gagal parsing output AI.");
+    // 6. Last Resort Repair: Remove trailing commas
+    try {
+        const fixedContent = jsonContent.replace(/,\s*([\]}])/g, '$1');
+        return JSON.parse(fixedContent);
+    } catch (e2) {
+        console.error("JSON Parse Fail. Raw:", rawText);
+        throw new Error("Gagal parsing output AI. Struktur JSON rusak.");
+    }
   }
 };
 
@@ -75,18 +125,74 @@ const sanitizeQuestion = (q: any): Omit<Question, 'id'> => {
   };
 };
 
+/**
+ * SMART INGESTION (HEAVY LIFTING)
+ * Menggunakan Loop Fallback. Jika model Pro Experimental gagal, coba model stabil.
+ */
+export const summarizeMaterial = async (apiKey: string, content: string): Promise<string> => {
+  if (!content) return "";
+  
+  const ai = new GoogleGenAI({ apiKey });
+  
+  const prompt = `
+    ROLE: Senior Knowledge Engineer.
+    TASK: Process the provided raw document into a "High-Density Knowledge Summary" optimized for future RAG (Retrieval Augmented Generation).
+    
+    INSTRUCTIONS:
+    1. READ the entire raw text.
+    2. EXTRACT every single definition, date, formula, key figure, and cause-effect relationship.
+    3. DISCARD fluff, introductions, filler words, and repetitive examples.
+    4. FORMAT the output as a structured list of facts and concepts.
+    
+    OUTPUT FORMAT (Plain Text):
+    [Topic Name]
+    - Concept A: Definition...
+    - Fact B: Date/Value...
+    - Relation C: A causes B because...
+    
+    RAW TEXT (Truncated for safety):
+    "${content.substring(0, 200000)}" 
+  `;
+
+  // --- RETRY LOGIC WITH MULTIPLE MODELS ---
+  for (const modelName of INGESTION_MODELS) {
+    try {
+      console.log(`[Smart Ingest] Trying model: ${modelName}...`);
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: { parts: [{ text: prompt }] }
+      });
+      
+      const result = response.text;
+      if (!result) throw new Error("Empty response");
+      
+      return `[SMART CACHE - ${modelName}]\n${result}`;
+    } catch (e: any) {
+      console.warn(`[Smart Ingest] Model ${modelName} failed:`, e.message);
+      // Continue to next model in loop
+    }
+  }
+
+  console.error("[Smart Ingest] All models failed. Falling back to raw text.");
+  return content.substring(0, 5000); // Ultimate Fallback if AI is completely dead
+};
+
+/**
+ * QUIZ GENERATION (FAST EXECUTION)
+ * Menggunakan Model Flash (default) untuk membuat soal dari Context yang sudah bersih.
+ */
 export const generateQuiz = async (
   apiKey: string, 
   files: File[] | File | null, 
   topic: string | undefined, 
-  modelId: string,
+  modelId: string, // User selected model
   questionCount: number,
   mode: QuizMode,
   examStyle: ExamStyle = ExamStyle.CONCEPTUAL,
   onProgress: (status: string) => void,
   existingQuestionsContext: string[] = [],
   customPrompt: string = "",
-  libraryContext: string = "" // NEW: Text content from Library
+  libraryContext: string = "" 
 ): Promise<{ questions: Question[], contextText: string }> => {
   
   if (!apiKey) throw new Error("API Key Gemini belum diatur.");
@@ -95,10 +201,11 @@ export const generateQuiz = async (
   const parts: any[] = [];
   let contextText = ""; 
 
-  // 1. Handle Library Context (Text Based)
+  // 1. Handle Library Context (Ini adalah Smart Cache dari Supabase/Local)
   if (libraryContext) {
-     onProgress("Memuat Library Materi...");
-     parts.push({ text: `REFERENCE MATERIAL:\n${libraryContext.substring(0, 500000)}` }); // Limit to safe token count
+     onProgress("Memuat Smart Cache (Hemat Token)...");
+     // Kirim konteks yang sudah diringkas. Flash model sangat cepat memproses ini.
+     parts.push({ text: `KNOWLEDGE BASE (SUMMARY):\n${libraryContext.substring(0, 100000)}` }); 
      contextText = "[Library Source]";
   }
 
@@ -115,7 +222,7 @@ export const generateQuiz = async (
   
   // 3. Topic Focus
   if (topic) {
-    parts.push({ text: `IMPORTANT: FOCUS ONLY ON THIS TOPIC: "${topic}". Ignore unrelated parts of the reference material.` });
+    parts.push({ text: `IMPORTANT: FOCUS ONLY ON THIS TOPIC: "${topic}". Ignore unrelated parts.` });
   }
 
   let avoidancePrompt = "";
@@ -124,29 +231,27 @@ export const generateQuiz = async (
       avoidancePrompt = `DO NOT repeat these questions: [${prevTopics}].`;
   }
 
+  // Optimized Prompt for JSON Stability
   const finalPrompt = `
     ROLE: Strict Academic Examiner.
     TASK: Create EXACTLY ${questionCount} multiple-choice questions in INDONESIAN.
     
-    STRICT RULES (ANTI-HALLUCINATION):
-    1. USE ONLY the Reference Material provided above. If the answer is not in the material, do not invent it.
-    2. FOCUS strictly on the Topic: "${topic || 'General'}".
-    3. IF MATERIAL IS EMPTY/UNREADABLE, return an error JSON with "text": "ERROR: Materi kosong/tidak terbaca".
-    4. NO META QUESTIONS like "What is discussed on page 1?". Ask about the CONCEPTS.
-    5. Difficulty: ${examStyle}.
+    INSTRUCTIONS:
+    1. USE the provided Knowledge Base.
+    2. GENERATE ${questionCount} valid JSON objects.
+    3. Difficulty: ${examStyle}.
+    4. FOCUS: "${topic || 'General Material'}".
     
-    USER CUSTOM INSTRUCTIONS:
-    "${customPrompt}"
+    USER NOTE: "${customPrompt}"
 
-    JSON FORMAT (Array):
+    OUTPUT FORMAT (Strict JSON Array):
     [
       {
         "text": "Question?",
         "options": ["A", "B", "C", "D"],
         "correctIndex": 0,
-        "explanation": "Why correct...",
-        "keyPoint": "Tag",
-        "difficulty": "Medium"
+        "explanation": "Why correct.",
+        "keyPoint": "Tag"
       }
     ]
     ${avoidancePrompt}
@@ -154,11 +259,13 @@ export const generateQuiz = async (
 
   parts.push({ text: finalPrompt });
 
-  onProgress(`Menyusun ${questionCount} soal berkualitas...`);
+  const selectedModel = modelId || DEFAULT_GENERATION_MODEL;
+  onProgress(`Menyusun ${questionCount} soal dengan ${selectedModel}...`);
   
-  try {
+  // --- GENERATION RETRY LOGIC (Simple 1-level fallback) ---
+  const tryGenerate = async (model: string) => {
       const response = await ai.models.generateContent({
-        model: modelId,
+        model: model,
         contents: { parts },
         config: { 
           responseMimeType: "application/json", 
@@ -166,6 +273,22 @@ export const generateQuiz = async (
           maxOutputTokens: 8192, 
         }
       });
+      return response;
+  };
+
+  try {
+      let response;
+      try {
+         response = await tryGenerate(selectedModel);
+      } catch (err: any) {
+         if (err.message.includes("404") || err.message.includes("not found")) {
+             console.warn(`Model ${selectedModel} not found, falling back to stable.`);
+             onProgress("Model Experimental sibuk/404, menggunakan model Stabil...");
+             response = await tryGenerate("gemini-2.5-flash");
+         } else {
+             throw err;
+         }
+      }
 
       const responseText = response.text;
       if (!responseText) throw new Error("AI Empty Response");
@@ -174,9 +297,14 @@ export const generateQuiz = async (
       const rawQuestions = cleanAndParseJSON(responseText);
 
       if (!Array.isArray(rawQuestions)) throw new Error("Format AI salah (Bukan Array).");
-      if (rawQuestions.length > 0 && rawQuestions[0].text.includes("ERROR:")) throw new Error(rawQuestions[0].text);
+      
+      const validQuestions = rawQuestions.filter(q => q.text && !q.text.includes("ERROR") && q.options && q.options.length > 1);
 
-      const finalQuestions = rawQuestions.map((q, index) => ({
+      if (validQuestions.length < 2) {
+         throw new Error("AI gagal generate cukup soal. Coba kurangi materi atau spesifikkan topik.");
+      }
+
+      const finalQuestions = validQuestions.map((q, index) => ({
         ...sanitizeQuestion(q),
         id: index + 1
       }));
@@ -185,7 +313,11 @@ export const generateQuiz = async (
 
   } catch (err: any) {
       console.error("Gemini Error:", err);
-      if (err.message.includes("400")) throw new Error("File terlalu besar atau API Error.");
+      if (err.message.includes("404") || err.message.includes("not found")) {
+         throw new Error(`Model ${modelId} tidak tersedia. Coba ganti model di Settings.`);
+      }
+      if (err.message.includes("429")) throw new Error("Server sibuk (Rate Limit). Tunggu sebentar.");
+      
       throw err;
   }
 };

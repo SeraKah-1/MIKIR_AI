@@ -90,6 +90,7 @@ export interface LibraryItem {
   id: string | number;
   title: string;
   content: string; 
+  processedContent?: string; // NEW: Cached summary/notes from AI
   type: 'pdf' | 'text' | 'note';
   tags: string[];
   created_at: string;
@@ -147,13 +148,20 @@ export interface ModelOption {
 }
 
 export const AVAILABLE_MODELS: ModelOption[] = [
-  { id: "gemini-2.0-flash", label: "Gemini 2.0 Flash (Fast & Smart)", provider: 'gemini', isVision: true },
-  { id: "gemini-2.0-flash-lite-preview-02-05", label: "Gemini 2.0 Flash Lite (Super Fast)", provider: 'gemini', isVision: true },
-  { id: "gemini-2.0-pro-exp-02-05", label: "Gemini 2.0 Pro (Reasoning)", provider: 'gemini', isVision: true },
-  { id: "gemini-1.5-pro", label: "Gemini 1.5 Pro (Legacy Stable)", provider: 'gemini', isVision: true },
-  { id: "gemma-2-27b-it", label: "Gemma 2 27B (Open Model)", provider: 'gemini' },
+  // --- GEMINI 3 SERIES (Frontier Intelligence) ---
+  { id: "gemini-3-pro-preview", label: "Gemini 3 Pro (Most Intelligent)", provider: 'gemini', isVision: true },
+  { id: "gemini-3-flash-preview", label: "Gemini 3 Flash (Balanced Speed)", provider: 'gemini', isVision: true },
+
+  // --- GEMINI 2.5 SERIES (Stable & Thinking) ---
+  { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro (Advanced Thinking)", provider: 'gemini', isVision: true },
+  { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash (Fast & Intelligent)", provider: 'gemini', isVision: true },
+  { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite (Ultra Fast)", provider: 'gemini', isVision: true },
+
+  // --- LEGACY / BACKUP ---
+  { id: "gemini-2.0-flash", label: "Gemini 2.0 Flash (Deprecated)", provider: 'gemini', isVision: true },
+  
+  // --- GROQ MODELS ---
   { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B (Versatile)", provider: 'groq' },
   { id: "llama-3.1-8b-instant", label: "Llama 3.1 8B (Instant)", provider: 'groq' },
   { id: "mixtral-8x7b-32768", label: "Mixtral 8x7B", provider: 'groq' },
-  { id: "gemma2-9b-it", label: "Gemma 2 9B (Groq)", provider: 'groq' },
 ];

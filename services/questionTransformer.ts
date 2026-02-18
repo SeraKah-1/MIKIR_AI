@@ -29,6 +29,33 @@ export const transformToMixed = (questions: Question[]): Question[] => {
   });
 };
 
+// --- NEW: SHUFFLE OPTIONS ---
+export const shuffleOptions = (questions: Question[]): Question[] => {
+  return questions.map(q => {
+    // Hanya acak Multiple Choice. T/F biasanya urutannya tetap (Benar/Salah).
+    if (q.type && q.type !== 'MULTIPLE_CHOICE') return q; 
+
+    // Deep copy options agar aman
+    const currentOptions = [...q.options];
+    const correctAnswerText = currentOptions[q.correctIndex];
+
+    // Fisher-Yates Shuffle
+    for (let i = currentOptions.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [currentOptions[i], currentOptions[j]] = [currentOptions[j], currentOptions[i]];
+    }
+
+    // Cari index baru untuk jawaban yang benar
+    const newCorrectIndex = currentOptions.indexOf(correctAnswerText);
+
+    return {
+        ...q,
+        options: currentOptions,
+        correctIndex: newCorrectIndex
+    };
+  });
+};
+
 const convertToTrueFalse = (q: Question): Question => {
   // Logic: 
   // 50% peluang kita ambil jawaban BENAR -> Hasil kuis harusnya TRUE

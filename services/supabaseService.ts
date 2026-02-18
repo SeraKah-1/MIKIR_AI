@@ -8,7 +8,7 @@
  */
 
 import { getSupabaseClient } from "../lib/supabaseClient";
-import { Question, CloudNote } from "../types";
+import { Question, CloudNote, LibraryItem } from "../types";
 
 // --- 1. SCHEMA DEFINITION ---
 export const SUPABASE_SCHEMA_SQL = `
@@ -28,7 +28,18 @@ CREATE TABLE IF NOT EXISTS public.generated_quizzes (
   questions jsonb NOT NULL
 );
 
--- 2. Tabel Neuro Notes (Sumber Catatan & Library)
+-- 2. Tabel Library Materi (PDF/Uploads)
+create table if not exists public.library_materials (
+  id text primary key,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  title text,
+  content text,
+  processed_content text,
+  file_type text,
+  tags text[]
+);
+
+-- 3. Tabel Neuro Notes (Catatan Kecil / Corat-coret)
 create table if not exists public.neuro_notes (
   id text primary key,
   timestamp bigint,
@@ -38,22 +49,28 @@ create table if not exists public.neuro_notes (
   provider text
 );
 
--- 3. Reset Permissions (Nuclear Option)
+-- 4. Reset Permissions (Nuclear Option)
 alter table public.generated_quizzes disable row level security;
+alter table public.library_materials disable row level security;
 alter table public.neuro_notes disable row level security;
 
 alter table public.generated_quizzes enable row level security;
+alter table public.library_materials enable row level security;
 alter table public.neuro_notes enable row level security;
 
--- 4. KEBIJAKAN "GOD MODE" (CRUD BEBAS)
+-- 5. KEBIJAKAN "GOD MODE" (CRUD BEBAS)
 drop policy if exists "God Mode Quizzes" on public.generated_quizzes;
 create policy "God Mode Quizzes" on public.generated_quizzes for all using (true) with check (true);
+
+drop policy if exists "God Mode Library" on public.library_materials;
+create policy "God Mode Library" on public.library_materials for all using (true) with check (true);
 
 drop policy if exists "God Mode Notes" on public.neuro_notes;
 create policy "God Mode Notes" on public.neuro_notes for all using (true) with check (true);
 
--- 5. Aktifkan Realtime
+-- 6. Aktifkan Realtime
 alter publication supabase_realtime add table public.neuro_notes;
+alter publication supabase_realtime add table public.library_materials;
 `;
 
 // --- 2. TYPES ---
@@ -132,7 +149,68 @@ export const MikirCloud = {
     }
   },
 
-  // --- NOTES MODULE (Includes Library Items) ---
+  // --- LIBRARY MODULE (New Separate Table) ---
+  library: {
+    async list(config: SupabaseConfig): Promise<LibraryItem[]> {
+      const sb = MikirCloud._client(config);
+      const { data, error } = await sb
+        .from('library_materials')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error("Library Fetch Error:", error);
+        return [];
+      }
+      if (!data) return [];
+
+      return data.map((item: any) => ({
+        id: item.id,
+        title: item.title,
+        content: item.content,
+        processedContent: item.processed_content, // Map DB snake_case to App camelCase
+        type: (item.file_type as any) || 'text',
+        tags: item.tags || [],
+        created_at: item.created_at
+      }));
+    },
+
+    async create(config: SupabaseConfig, item: LibraryItem) {
+      const sb = MikirCloud._client(config);
+      const dbPayload = {
+        id: String(item.id),
+        title: item.title,
+        content: item.content,
+        processed_content: item.processedContent,
+        file_type: item.type,
+        tags: item.tags,
+        created_at: new Date().toISOString()
+      };
+      const { error } = await sb.from('library_materials').insert(dbPayload);
+      if (error) throw new Error(`Gagal simpan ke Library: ${error.message}`);
+      return true;
+    },
+
+    async delete(config: SupabaseConfig, id: string | number) {
+      const sb = MikirCloud._client(config);
+      const { error } = await sb.from('library_materials').delete().eq('id', String(id));
+      if (error) throw new Error(`Gagal hapus materi: ${error.message}`);
+      return true;
+    },
+
+    async update(config: SupabaseConfig, id: string | number, updates: Partial<LibraryItem>) {
+      const sb = MikirCloud._client(config);
+      const dbUpdates: any = {};
+      if (updates.processedContent) dbUpdates.processed_content = updates.processedContent;
+      if (updates.content) dbUpdates.content = updates.content;
+      
+      const { error } = await sb.from('library_materials').update(dbUpdates).eq('id', String(id));
+      if (error) throw new Error(`Gagal update materi: ${error.message}`);
+      return true;
+    }
+  },
+
+  // --- NOTES MODULE (Legacy / Scratchpad) ---
   notes: {
     async list(config: SupabaseConfig): Promise<CloudNote[]> {
       const sb = MikirCloud._client(config);
@@ -140,36 +218,17 @@ export const MikirCloud = {
         const { data, error } = await sb
           .from('neuro_notes')
           .select('*')
-          .order('timestamp', { ascending: false })
-          .limit(50); // Increased limit for library
+          .order('timestamp', { ascending: false });
         
         if (error) return [];
-        if (!data) return [];
-
-        return data.map((item: any) => {
-          let displayTitle = item.topic;
-          const rawContent = item.content || "";
-
-          if (!displayTitle || displayTitle.trim() === "") {
-             const firstLine = rawContent.split('\n')[0];
-             displayTitle = firstLine.substring(0, 50);
-             if (rawContent.length > 50) displayTitle += "...";
-          } else if (displayTitle.length > 80) {
-             displayTitle = displayTitle.substring(0, 80) + "...";
-          }
-
-          return {
+        return data ? data.map((item: any) => ({
             id: item.id,
-            title: displayTitle || "Catatan Tanpa Judul",
-            content: rawContent,
+            title: item.topic || "Note",
+            content: item.content,
             created_at: item.timestamp ? new Date(Number(item.timestamp)).toISOString() : new Date().toISOString(),
-            tags: [item.mode, item.provider].filter(Boolean) // We store type in 'provider' column for now
-          };
-        });
-
-      } catch (e) {
-        return [];
-      }
+            tags: [item.mode, item.provider].filter(Boolean)
+        })) : [];
+      } catch (e) { return []; }
     },
 
     async create(config: SupabaseConfig, payload: any) {
