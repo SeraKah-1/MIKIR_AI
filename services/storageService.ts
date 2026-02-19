@@ -9,6 +9,7 @@
 import { Question, ModelConfig, AiProvider, StorageProvider, CloudNote, LibraryItem } from "../types";
 import { MikirCloud } from "./supabaseService"; 
 import { summarizeMaterial } from "./geminiService";
+import { notifySupabaseError } from "./kaomojiNotificationService";
 import { get, set, update } from 'idb-keyval'; // IndexedDB Wrapper
 
 const HISTORY_KEY = 'glassquiz_history';
@@ -172,9 +173,11 @@ export const updateLibraryItem = async (id: string | number, updates: Partial<Li
     // 2. Update Cloud (Using the specific Library Module)
     const sbConfig = getSupabaseConfig();
     if (sbConfig) {
-        if (updates.processedContent || updates.content) {
-             await MikirCloud.library.update(sbConfig, id, updates);
-        }
+        try {
+            if (updates.processedContent || updates.content) {
+                 await MikirCloud.library.update(sbConfig, id, updates);
+            }
+        } catch (e) { console.warn("Cloud sync failed (Update)"); }
     }
 };
 
@@ -199,7 +202,10 @@ export const saveToLibrary = async (title: string, content: string, processedCon
     // 2. Cloud (Supabase) - Sync if connected
     const sbConfig = getSupabaseConfig();
     if (sbConfig) {
-       await MikirCloud.library.create(sbConfig, newItem);
+       await MikirCloud.library.create(sbConfig, newItem).catch(e => {
+           console.error("Cloud Library Save Failed:", e);
+           notifySupabaseError();
+       });
     }
   } catch (err) {
     console.error("Library Save Error:", err);
@@ -268,7 +274,7 @@ export const deleteLibraryItem = async (id: string | number) => {
 
   const sbConfig = getSupabaseConfig();
   if (sbConfig) {
-    await MikirCloud.library.delete(sbConfig, id);
+    await MikirCloud.library.delete(sbConfig, id).catch(e => console.warn("Cloud delete failed"));
   }
 };
 
@@ -304,7 +310,10 @@ export const saveGeneratedQuiz = async (file: File | null, config: ModelConfig, 
 
     const sbConfig = getSupabaseConfig();
     if (sbConfig) {
-      MikirCloud.quiz.create(sbConfig, newEntry).catch(console.warn);
+      MikirCloud.quiz.create(sbConfig, newEntry).catch(e => {
+          console.error("Cloud Quiz Save Failed:", e);
+          notifySupabaseError();
+      });
     }
   } catch (err) {
     console.error("Save Error:", err);

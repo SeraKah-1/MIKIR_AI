@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Upload, FileText, Layout, Zap, TrendingUp, Skull, BookOpen, Type, Cloud, RefreshCw, CheckCircle2, X, PlayCircle, Layers, Settings2, Sparkles, Folder, Target, BrainCircuit, Shuffle } from 'lucide-react';
+import { Upload, FileText, Layout, Zap, TrendingUp, Skull, BookOpen, Type, Cloud, RefreshCw, CheckCircle2, X, PlayCircle, Layers, Settings2, Sparkles, Folder, Target, BrainCircuit, Shuffle, Cpu, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AVAILABLE_MODELS, ModelConfig, QuizMode, ExamStyle, AiProvider, CloudNote, Question, LibraryItem, ModelOption } from '../types';
 import { GlassButton } from './GlassButton';
@@ -98,6 +98,13 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
     };
     loadModels();
   }, [provider]);
+
+  const handleProviderChange = (newProvider: AiProvider) => {
+      setProvider(newProvider);
+      // Auto-select first model of that provider to prevent mismatch
+      const firstModel = dynamicModels.find(m => m.provider === newProvider) || AVAILABLE_MODELS.find(m => m.provider === newProvider);
+      if (firstModel) setModelId(firstModel.id);
+  };
 
   const handleFilesUpload = (newFiles: FileList | null) => {
     if (!newFiles) return;
@@ -298,6 +305,42 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
                  />
               </div>
            )}
+
+           {/* --- AI BRAIN CONTROL --- */}
+           <div className="bg-white/50 p-4 rounded-3xl border border-white shadow-sm flex flex-col md:flex-row gap-4 items-center">
+              {/* Provider Switcher */}
+              <div className="flex bg-slate-200/50 p-1.5 rounded-xl shrink-0">
+                 <button 
+                    onClick={() => handleProviderChange('gemini')}
+                    className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center transition-all ${provider === 'gemini' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
+                 >
+                    <Zap size={14} className="mr-1.5" /> Gemini
+                 </button>
+                 <button 
+                    onClick={() => handleProviderChange('groq')}
+                    className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center transition-all ${provider === 'groq' ? 'bg-white shadow-sm text-orange-600' : 'text-slate-500 hover:text-slate-700'}`}
+                 >
+                    <Cpu size={14} className="mr-1.5" /> Groq
+                 </button>
+              </div>
+
+              {/* Model Dropdown */}
+              <div className="relative flex-1 w-full">
+                 <select 
+                    value={modelId}
+                    onChange={(e) => setModelId(e.target.value)}
+                    disabled={isLoadingModels}
+                    className="w-full appearance-none bg-white border border-slate-200 text-slate-700 font-bold text-sm rounded-xl px-4 py-2.5 pr-10 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 disabled:opacity-50"
+                 >
+                    {dynamicModels.filter(m => m.provider === provider).map(m => (
+                       <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                 </select>
+                 <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                    {isLoadingModels ? <RefreshCw className="animate-spin" size={14} /> : <ChevronDown size={14} />}
+                 </div>
+              </div>
+           </div>
 
            {/* Mode Selection with Tactile Cards */}
            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
