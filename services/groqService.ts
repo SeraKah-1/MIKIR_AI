@@ -1,270 +1,293 @@
 
-/**
- * ==========================================
- * GROQ CLOUD SERVICE (SMART CHUNKING + RAG)
- * ==========================================
- */
+import Groq from 'groq-sdk';
+import { GenerationConfig, SyllabusItem } from '../types';
+import { getStrictPrompt, UNIVERSAL_STRUCTURE_PROMPT } from '../utils/prompts';
+import { processGeneratedNote } from '../utils/formatter';
 
-import { Question, QuizMode, ExamStyle, ModelOption } from "../types";
-
-const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models";
-const BATCH_SIZE = 5; 
-const MAX_RETRIES = 3; 
-
-export const fetchGroqModels = async (apiKey: string): Promise<ModelOption[]> => {
-  try {
-    const response = await fetch(GROQ_MODELS_URL, {
-      method: "GET",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json"
+// Helper to get SDK instance with Key Rotation
+const getGroqClient = (apiKeyString: string) => {
+  let finalKey = apiKeyString;
+  
+  // KEY ROTATION LOGIC
+  if (finalKey.includes(',') || finalKey.includes('\n')) {
+      const keys = finalKey.split(/[\n,]+/).map(k => k.trim()).filter(k => k.length > 0);
+      if (keys.length > 0) {
+          const randomIndex = Math.floor(Math.random() * keys.length);
+          finalKey = keys[randomIndex];
       }
-    });
-
-    if (!response.ok) throw new Error("Gagal mengambil model Groq");
-
-    const data = await response.json();
-    
-    // Transform Groq API response to ModelOption
-    if (data && Array.isArray(data.data)) {
-       return data.data
-         .filter((m: any) => !m.id.includes('whisper')) // Exclude audio models
-         .map((m: any) => ({
-            id: m.id,
-            label: m.id, // Use ID as label for now
-            provider: 'groq',
-            isVision: false 
-         }))
-         .sort((a: any, b: any) => a.id.localeCompare(b.id));
-    }
-    return [];
-  } catch (error) {
-    console.error("Groq Model Fetch Error:", error);
-    return [];
   }
-};
 
-const extractAndParseJSON = (text: string): any[] => {
-  let cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
-  const start = cleaned.indexOf('[');
-  const end = cleaned.lastIndexOf(']');
-  if (start === -1 || end === -1) {
-     if (cleaned.trim().startsWith('{')) {
-        try { return [JSON.parse(cleaned)]; } catch(e) {}
-     }
-     return [];
-  }
-  cleaned = cleaned.substring(start, end + 1);
-  try { return JSON.parse(cleaned); } catch (e) { return []; }
-};
-
-export const extractPdfText = async (file: File, onProgress?: (p: string) => void): Promise<string> => {
-  try {
-    // @ts-ignore
-    const pdfjs = window.pdfjsLib;
-    if (!pdfjs) throw new Error("PDF Lib Missing");
-    if (!pdfjs.GlobalWorkerOptions.workerSrc) pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
-
-    const arrayBuffer = await file.arrayBuffer();
-    const loadingTask = pdfjs.getDocument({ data: arrayBuffer });
-    const pdf = await loadingTask.promise;
-    
-    let fullText = "";
-    const maxPages = Math.min(pdf.numPages, 20); // Limit pages to avoid context overflow
-
-    for (let i = 1; i <= maxPages; i++) {
-      if (onProgress) onProgress(`${file.name}: Hal ${i}/${maxPages}`);
-      
-      // YIELD TO MAIN THREAD: Prevent UI Freeze on heavy parsing
-      await new Promise(resolve => setTimeout(resolve, 0));
-
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      const pageText = textContent.items.map((item: any) => item.str).join(" ");
-      fullText += `\n${pageText}\n`;
-    }
-    return fullText;
-  } catch (error: any) {
-    throw new Error(`Gagal baca ${file.name}: ` + error.message);
-  }
-};
-
-const processFileContent = async (file: File, onProgress?: (p: string) => void): Promise<string> => {
-  if (file.type === "application/pdf" || file.name.endsWith('.pdf')) {
-    return await extractPdfText(file, onProgress);
-  }
-  return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (e) => resolve(e.target?.result as string);
-      reader.readAsText(file);
+  return new Groq({ 
+    apiKey: finalKey,
+    dangerouslyAllowBrowser: true // Required for client-side use
   });
 };
 
-const sanitizeQuestion = (q: any): Question | null => {
-  const qText = q.text || q.question || q.soal; 
-  if (!qText || typeof qText !== 'string' || qText.length < 5) return null; 
-
-  let options = Array.isArray(q.options) ? q.options : (q.choices || []);
-  if (options.length < 2) return null;
-  
-  options = options.map(String).slice(0, 4);
-  while(options.length < 4) options.push("-");
-  
-  let correctIndex = typeof q.correctIndex === 'number' ? q.correctIndex : 0;
-  
-  // Shuffle options
-  const correctContent = options[correctIndex];
-  for (let i = options.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [options[i], options[j]] = [options[j], options[i]];
-  }
-  
-  return {
-    id: 0,
-    text: qText,
-    options: options,
-    correctIndex: options.indexOf(correctContent),
-    explanation: q.explanation || "Pembahasan tidak tersedia.",
-    keyPoint: q.keyPoint || "Umum",
-    difficulty: "Medium"
-  };
-};
-
-export const generateQuizGroq = async (
-  apiKey: string,
-  files: File[] | File | null,
-  topic: string | undefined,
-  modelId: string,
-  questionCount: number,
-  mode: QuizMode,
-  examStyle: ExamStyle,
-  onProgress: (status: string) => void,
-  existingQuestionsContext: string[] = [],
-  customPrompt: string = "" 
-): Promise<{ questions: Question[], contextText: string }> => {
-
-  if (!apiKey) throw new Error("API Key Groq kosong.");
-
-  let contextMaterial = "";
-  
-  // Normalize files
-  const fileArray = Array.isArray(files) ? files : (files ? [files] : []);
-
-  if (fileArray.length > 0) {
-    onProgress("Membaca Knowledge Base...");
-    for (const file of fileArray) {
-        const fileText = await processFileContent(file, (p) => onProgress(p));
-        // Add explicit separators for Llama models
-        contextMaterial += `\n<document_content filename="${file.name}">\n${fileText}\n</document_content>\n`;
+/**
+ * Fetch available models from Groq API
+ * Equivalent to Python: requests.get("https://api.groq.com/openai/v1/models", ...)
+ */
+export const fetchGroqModels = async (apiKeyString: string): Promise<{id: string, object: string}[]> => {
+    let finalKey = apiKeyString;
+    if (finalKey.includes(',') || finalKey.includes('\n')) {
+        finalKey = finalKey.split(/[\n,]+/).map(k => k.trim())[0]; // Use first key for fetching list
     }
-  } else {
-    contextMaterial = topic || "";
-  }
 
-  // Safety Check: If context is too short, warn user (prevents hallucinations)
-  if (contextMaterial.length < 50 && !topic) {
-      throw new Error("Materi kosong atau tidak terbaca. Harap ketik topik manual atau cek file PDF.");
-  }
+    if (!finalKey) return [];
 
-  const totalBatches = Math.ceil(questionCount / BATCH_SIZE);
-  let allRawQuestions: any[] = [];
-  const chunkSize = Math.ceil(contextMaterial.length / totalBatches);
-
-  for (let i = 0; i < totalBatches; i++) {
-    const batchNum = i + 1;
-    const needed = Math.min(BATCH_SIZE, questionCount - allRawQuestions.length);
-    if (needed <= 0) break;
-
-    const startIdx = i * chunkSize;
-    const endIdx = Math.min((i + 1) * chunkSize, contextMaterial.length);
-    const batchContext = contextMaterial.substring(Math.max(0, startIdx - 500), endIdx); 
-
-    let success = false;
-    let attempts = 0;
-
-    while (!success && attempts < MAX_RETRIES) {
-      attempts++;
-      onProgress(`Groq: Meracik Paket Soal ${batchNum}/${totalBatches}...`);
-
-      // STRICT PROMPT ENGINEERING FOR LLAMA-3 / MIXTRAL
-      // We use XML tags to clearly separate Instructions from Data.
-      const prompt = `
-        <context_material>
-        ${batchContext.substring(0, 15000)}
-        </context_material>
-
-        <instructions>
-        You are an exam generator. Your task is to create ${needed} multiple-choice questions in INDONESIAN language.
-        
-        CRITICAL RULES:
-        1. SOURCE OF TRUTH: You must ONLY use the text inside <context_material> tags. Do NOT use outside knowledge.
-        2. If the <context_material> is empty or unrelated, return an empty JSON array [].
-        3. IGNORE metadata like page numbers, headers, or footers.
-        4. FOCUS: ${topic ? `Focus specifically on: ${topic}` : 'Cover the main concepts found in the text.'}
-        5. DIFFICULTY: ${examStyle}
-        6. USER NOTE: ${customPrompt || "None"}
-        
-        OUTPUT FORMAT:
-        Return a RAW JSON ARRAY. No markdown, no "Here is the JSON", just the array.
-        [
-          {
-            "text": "Question text here?",
-            "options": ["Option A", "Option B", "Option C", "Option D"],
-            "correctIndex": 0,
-            "explanation": "Brief explanation why A is correct based on the text.",
-            "keyPoint": "Topic Tag"
-          }
-        ]
-        </instructions>
-      `;
-
-      try {
-        const response = await fetch(GROQ_API_URL, {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            messages: [
-              { 
-                  role: "system", 
-                  content: "You are a strict JSON-only API. You extract educational questions from provided text. You never hallucinate facts not present in the source." 
-              },
-              { role: "user", content: prompt }
-            ],
-            model: modelId,
-            temperature: 0.3, // Lower temperature for more factual results
-            stream: false,
-            response_format: { type: "json_object" } 
-          })
+    try {
+        const response = await fetch("https://api.groq.com/openai/v1/models", {
+            method: "GET",
+            headers: {
+                "Authorization": `Bearer ${finalKey}`,
+                "Content-Type": "application/json"
+            }
         });
 
-        if (response.status === 429) {
-           await new Promise(r => setTimeout(r, 4000));
-           continue; 
+        if (!response.ok) {
+            throw new Error(`Groq API Error: ${response.statusText}`);
         }
 
-        if (!response.ok) throw new Error(`Groq API Error: ${response.status}`);
-        
-        const json = await response.json();
-        const content = json.choices[0]?.message?.content;
-        const batchQs = extractAndParseJSON(content);
-
-        if (batchQs.length > 0) {
-           const validQuestions = batchQs.map(sanitizeQuestion).filter(q => q !== null);
-           if (validQuestions.length > 0) {
-               allRawQuestions = [...allRawQuestions, ...validQuestions];
-               success = true;
-           }
-        }
-      } catch (err) {
-        console.warn("Batch failed, retrying...", err);
-        if (attempts < MAX_RETRIES) await new Promise(r => setTimeout(r, 2000));
-      }
+        const data = await response.json();
+        return data.data || [];
+    } catch (error) {
+        console.error("Failed to fetch dynamic Groq models:", error);
+        return [];
     }
+};
+
+export const getAvailableGroqModels = async (config: GenerationConfig) => {
+  const envKey = (import.meta as any).env?.VITE_GROQ_API_KEY || (typeof process !== 'undefined' ? process.env.GROQ_API_KEY : '');
+  const apiKey = config.groqApiKey || envKey;
+  if (!apiKey) return [];
+
+  // Use the new fetch function
+  const models = await fetchGroqModels(apiKey);
+  return models;
+};
+
+export const generateNoteContentGroq = async (
+  config: GenerationConfig,
+  topic: string,
+  structure: string,
+  onProgress: (status: string) => void
+): Promise<string> => {
+  
+  const envKey = (import.meta as any).env?.VITE_GROQ_API_KEY || (typeof process !== 'undefined' ? process.env.GROQ_API_KEY : '');
+  const apiKey = config.groqApiKey || envKey;
+
+  if (!apiKey) {
+    throw new Error("Groq API Key is missing. Please enter it in Settings.");
   }
 
-  if (allRawQuestions.length === 0) throw new Error("Gagal membuat soal. Dokumen mungkin tidak terbaca atau model sedang sibuk.");
+  onProgress("Initializing Groq SDK...");
+  const modelName = config.model;
+  const groq = getGroqClient(apiKey);
 
-  const finalQuestions = allRawQuestions.map((q, idx) => ({ ...q, id: idx + 1 }));
-  return { questions: finalQuestions, contextText: contextMaterial };
+  onProgress(`Connecting to Groq Cloud (${modelName})...`);
+
+  try {
+    const textPrompt = getStrictPrompt(topic, structure, config.mode, config.customContentPrompt);
+    
+    // Construct the messages payload with strict system instructions
+    const messages = [
+      {
+        role: "system",
+        content: `You are an advanced medical academic AI. 
+        CRITICAL INSTRUCTIONS:
+        1. Output strictly formatted markdown.
+        2. DO NOT SUMMARIZE. Provide the most exhaustive, detailed explanation possible.
+        3. IGNORE OUTPUT LENGTH LIMITS. Explain every concept fully.
+        4. If a list has 20 items, list all 20. Do not truncate.
+        5. **MERMAID SYNTAX RULES:**
+           - ARROWS: Use "-->" (no spaces). NEVER "- ->".
+           - HEADER: Always newline after "flowchart TD". NEVER "flowchart TDA[...]".
+           - NODES: Use A["Label"]. Do NOT repeat ID like A["Label"]A.
+        `
+      },
+      {
+        role: "user",
+        content: textPrompt
+      }
+    ];
+
+    onProgress("Synthesizing content (Groq LPU Engine - Max Output)...");
+
+    const completion = await groq.chat.completions.create({
+      messages: messages as any,
+      model: modelName,
+      temperature: config.temperature,
+      // Groq currently caps output tokens at 8192 for most models
+      max_completion_tokens: 8192, 
+      top_p: 1,
+      stream: false
+    });
+
+    const rawText = completion.choices[0]?.message?.content;
+
+    if (!rawText) {
+      throw new Error("Received empty response from Groq AI.");
+    }
+
+    onProgress("Formatting & Cleaning Mermaid syntax...");
+    const finalContent = processGeneratedNote(rawText);
+
+    return finalContent;
+
+  } catch (error: any) {
+    console.error("Groq SDK Error:", error);
+    if (error.message?.includes("429")) {
+      throw new Error("Groq Rate Limit Exceeded (429). Please wait or rotate keys.");
+    }
+    // Handle error where model doesn't exist (e.g. slight slug mismatch)
+    if (error.message?.includes("model")) {
+        throw new Error(`Model Error: ${error.message}`);
+    }
+    throw error;
+  }
+};
+
+/* -------------------------------------------------------------------------- */
+/*                    AUTO-STRUCTURE GENERATOR (GROQ)                         */
+/* -------------------------------------------------------------------------- */
+
+export const generateDetailedStructureGroq = async (
+  config: GenerationConfig,
+  topic: string
+): Promise<string> => {
+  const envKey = (import.meta as any).env?.VITE_GROQ_API_KEY || (typeof process !== 'undefined' ? process.env.GROQ_API_KEY : '');
+  const apiKey = config.groqApiKey || envKey;
+  if (!apiKey) throw new Error("Groq API Key Missing");
+
+  const groq = getGroqClient(apiKey);
+  // Use config.structureModel if available, else fallback
+  const modelName = config.structureModel || config.model || 'llama-3.3-70b-versatile';
+
+  try {
+    const systemPrompt = config.customStructurePrompt || UNIVERSAL_STRUCTURE_PROMPT;
+
+    const completion = await groq.chat.completions.create({
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `INPUT TOPIC: ${topic}` }
+      ],
+      model: modelName,
+      temperature: 0.3,
+      stream: false
+    });
+
+    return completion.choices[0]?.message?.content || "";
+  } catch (e: any) {
+    console.error("Groq Structure Auto-Gen Error", e);
+    throw new Error("Failed to auto-generate structure: " + e.message);
+  }
+};
+
+/* -------------------------------------------------------------------------- */
+/*                        SYLLABUS PARSERS (GROQ)                             */
+/* -------------------------------------------------------------------------- */
+
+const SYLLABUS_PROMPT = `
+  TASK: Analyze the provided Syllabus content.
+  GOAL: Extract a logical, sequential learning path of specific medical topics.
+  RETURN JSON STRING ARRAY ONLY.
+  Example: ["Topic 1", "Topic 2"]
+`;
+
+export const parseSyllabusFromTextGroq = async (
+  config: GenerationConfig,
+  rawText: string
+): Promise<SyllabusItem[]> => {
+  const envKey = (import.meta as any).env?.VITE_GROQ_API_KEY || (typeof process !== 'undefined' ? process.env.GROQ_API_KEY : '');
+  const apiKey = config.groqApiKey || envKey;
+  if (!apiKey) throw new Error("Groq API Key Missing");
+  
+  const groq = getGroqClient(apiKey);
+  // Respect the model selected in the neural engine settings
+  const modelName = config.model || 'llama-3.3-70b-versatile';
+
+  try {
+    const completion = await groq.chat.completions.create({
+      messages: [
+        { role: "system", content: SYLLABUS_PROMPT },
+        { role: "user", content: rawText }
+      ],
+      model: modelName,
+      temperature: 0.2,
+      stream: false
+    });
+
+    const text = completion.choices[0]?.message?.content || "[]";
+    // Clean potential markdown code blocks
+    const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    
+    // Attempt parse
+    let topics: string[] = [];
+    try {
+        topics = JSON.parse(cleanJson);
+    } catch(e) {
+        // Fallback: split by newlines if JSON fails but list looks okay
+        topics = cleanJson.split('\n')
+          .map(t => t.replace(/^\d+[\.\)]\s*/, '').trim()) // Remove "1. " or "1) "
+          .filter(t => t.length > 0 && !t.startsWith('['));
+    }
+
+    return topics.map((t, index) => ({
+      id: `topic-${Date.now()}-${index}`,
+      topic: t,
+      status: 'pending'
+    }));
+
+  } catch (e: any) {
+    console.error("Groq Syllabus Parsing Error", e);
+    throw new Error("Failed to parse syllabus with Groq: " + e.message);
+  }
+};
+
+/* -------------------------------------------------------------------------- */
+/*                        REFINEMENT ENGINE (GROQ)                            */
+/* -------------------------------------------------------------------------- */
+
+export const refineNoteContentGroq = async (
+  config: GenerationConfig,
+  currentContent: string,
+  instruction: string
+): Promise<string> => {
+  const envKey = (import.meta as any).env?.VITE_GROQ_API_KEY || (typeof process !== 'undefined' ? process.env.GROQ_API_KEY : '');
+  const apiKey = config.groqApiKey || envKey;
+  if (!apiKey) throw new Error("Groq API Key Missing");
+
+  const groq = getGroqClient(apiKey);
+  const modelName = config.model || 'llama-3.3-70b-versatile';
+
+  try {
+    const prompt = `
+    ROLE: Expert Medical Editor.
+    TASK: Modify the following Medical Note based on the USER INSTRUCTION.
+    
+    USER INSTRUCTION: "${instruction}"
+    
+    RULES:
+    1. Retain the original Markdown formatting (Headers, Mermaid charts, Callouts) unless specifically asked to change them.
+    2. Do NOT output "Here is the revised note". Just output the Markdown.
+    3. Ensure technical accuracy is maintained.
+    
+    ORIGINAL CONTENT:
+    """
+    ${currentContent}
+    """
+    `;
+
+    const completion = await groq.chat.completions.create({
+      messages: [{ role: "user", content: prompt }],
+      model: modelName,
+      temperature: 0.3,
+      stream: false
+    });
+
+    return processGeneratedNote(completion.choices[0]?.message?.content || currentContent);
+  } catch (e: any) {
+    console.error("Groq Refinement Error", e);
+    throw new Error("Failed to refine content: " + e.message);
+  }
 };
