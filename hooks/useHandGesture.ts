@@ -16,12 +16,20 @@ export const useHandGesture = (
   onTrigger: (gesture: string) => void,
   isPaused: boolean
 ) => {
+  const onTriggerRef = useRef(onTrigger);
+  
+  useEffect(() => {
+    onTriggerRef.current = onTrigger;
+  }, [onTrigger]);
+
   const [state, setState] = useState<GestureState>({
     isLoaded: false,
     error: null,
     detectedGesture: null,
     dwellProgress: 0,
   });
+  
+  const [isHandDetected, setIsHandDetected] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -35,9 +43,15 @@ export const useHandGesture = (
   // --- 1. LOAD MEDIAPIPE ---
   useEffect(() => {
     let active = true;
+    let loadTimeout: NodeJS.Timeout;
     
     const loadMediaPipe = async () => {
       try {
+        // Set a timeout to detect hangs
+        loadTimeout = setTimeout(() => {
+            if (active) setState(prev => ({ ...prev, error: "Koneksi lambat. Gagal memuat AI." }));
+        }, 15000);
+
         const { FilesetResolver, HandLandmarker } = await import("https://esm.sh/@mediapipe/tasks-vision@0.10.17");
 
         const vision = await FilesetResolver.forVisionTasks(
@@ -58,14 +72,16 @@ export const useHandGesture = (
           minTrackingConfidence: 0.6
         });
 
+        clearTimeout(loadTimeout);
+
         if (active) {
             setState(prev => ({ ...prev, isLoaded: true }));
-            startCamera();
         }
         
       } catch (err: any) {
         console.error("MediaPipe Load Error:", err);
-        if (active) setState(prev => ({ ...prev, error: "Gagal memuat AI Kamera." }));
+        clearTimeout(loadTimeout);
+        if (active) setState(prev => ({ ...prev, error: "Gagal memuat AI Kamera. Cek koneksi internet." }));
       }
     };
 
@@ -73,6 +89,7 @@ export const useHandGesture = (
 
     return () => {
       active = false;
+      clearTimeout(loadTimeout);
       stopCamera();
       if (landmarkerRef.current) {
           landmarkerRef.current.close();
@@ -81,9 +98,22 @@ export const useHandGesture = (
     };
   }, []);
 
-  // --- 2. CAMERA SETUP ---
+  // --- 2. CAMERA SETUP (Triggered when Loaded) ---
+  useEffect(() => {
+      if (state.isLoaded && videoRef.current && !videoRef.current.srcObject) {
+          startCamera();
+      }
+  }, [state.isLoaded]);
+
   const startCamera = async () => {
-    if (!videoRef.current) return;
+    if (!videoRef.current) {
+        // Retry once if ref is not ready (React render timing)
+        setTimeout(() => {
+            if (videoRef.current && !videoRef.current.srcObject) startCamera();
+        }, 500);
+        return;
+    }
+    
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
           video: { 
@@ -93,10 +123,14 @@ export const useHandGesture = (
              frameRate: { ideal: 30 }
           } 
       });
-      videoRef.current.srcObject = stream;
-      videoRef.current.addEventListener('loadeddata', predictWebcam);
+      
+      if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.addEventListener('loadeddata', predictWebcam);
+      }
     } catch (err) {
-      setState(prev => ({ ...prev, error: "Akses kamera ditolak." }));
+      console.error("Camera Error:", err);
+      setState(prev => ({ ...prev, error: "Akses kamera ditolak. Izinkan akses di browser." }));
     }
   };
 
@@ -114,11 +148,9 @@ export const useHandGesture = (
 
     const video = videoRef.current;
     
-    // THROTTLING: Process only if timestamp changed enough (e.g., every 150ms)
-    // currentTime is in seconds.
     if (video.currentTime !== lastVideoTimeRef.current) {
         const timeDiff = (video.currentTime - lastVideoTimeRef.current) * 1000;
-        if (timeDiff < 150) { // Limit to ~6-7 FPS for gesture to save battery
+        if (timeDiff < 100) { // ~10 FPS for smoother feedback
              requestRef.current = requestAnimationFrame(predictWebcam);
              return;
         }
@@ -131,11 +163,11 @@ export const useHandGesture = (
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
             
-            // --- DRAW ROI BOX (Lower Right) ---
-            const roiX = canvas.width * 0.25;
-            const roiY = canvas.height * 0.3;
-            const roiW = canvas.width * 0.5;
-            const roiH = canvas.height * 0.7;
+            // --- DRAW ROI BOX (Centered) ---
+            const roiW = canvas.width * 0.4; // 40% width
+            const roiH = canvas.height * 0.5; // 50% height
+            const roiX = (canvas.width - roiW) / 2; // Centered X
+            const roiY = (canvas.height - roiH) / 2; // Centered Y
 
             let startTimeMs = performance.now();
             const results = landmarkerRef.current.detectForVideo(video, startTimeMs);
@@ -143,23 +175,19 @@ export const useHandGesture = (
             if (ctx) {
               ctx.clearRect(0, 0, canvas.width, canvas.height);
               
-              // Visual Feedback for ROI (Subtler)
-              ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
-              ctx.lineWidth = 1;
-              ctx.strokeRect(roiX, roiY, roiW, roiH);
-              
-              // Check Hands
               if (results.landmarks && results.landmarks.length > 0) {
                   const landmarks = results.landmarks[0];
+                  setIsHandDetected(true);
                   
                   // --- 1. Check ROI ---
                   const wrist = landmarks[0];
                   const inROI = (wrist.x * canvas.width > roiX) && 
                                 (wrist.x * canvas.width < roiX + roiW) &&
-                                (wrist.y * canvas.height > roiY);
+                                (wrist.y * canvas.height > roiY) &&
+                                (wrist.y * canvas.height < roiY + roiH);
 
-                  // Draw Skeleton (Optimized colors)
-                  drawHand(ctx, landmarks, inROI ? '#34d399' : '#f43f5e');
+                  // Draw Skeleton (Neon Style)
+                  drawHand(ctx, landmarks, inROI ? '#00ffcc' : '#f43f5e');
 
                   if (inROI && !isPaused) {
                     const gesture = recognizeGesture(landmarks);
@@ -168,6 +196,7 @@ export const useHandGesture = (
                     resetDwell();
                   }
               } else {
+                  setIsHandDetected(false);
                   resetDwell();
               }
             }
@@ -183,7 +212,6 @@ export const useHandGesture = (
       // Finger PIP (Joint 2): 6, 10, 14, 18
       
       const isFingerUp = (tipIdx: number, pipIdx: number) => {
-         // Check TIP against PIP (Joint 2) for stability
          return landmarks[tipIdx].y < landmarks[pipIdx].y; 
       };
 
@@ -192,18 +220,40 @@ export const useHandGesture = (
       const ringUp = isFingerUp(16, 14);
       const pinkyUp = isFingerUp(20, 18);
 
-      const count = (indexUp?1:0) + (middleUp?1:0) + (ringUp?1:0) + (pinkyUp?1:0);
+      const fingersUpCount = (indexUp?1:0) + (middleUp?1:0) + (ringUp?1:0) + (pinkyUp?1:0);
 
       const thumbTip = landmarks[4];
-      const thumbMCP = landmarks[2];
-      const isThumbUp = thumbTip.y < thumbMCP.y; 
+      const thumbIP = landmarks[3];
+      const indexMCP = landmarks[5];
+      const wrist = landmarks[0];
+      const middleMCP = landmarks[9];
+
+      // Calculate Scale (Wrist to Middle MCP)
+      const scale = Math.hypot(middleMCP.x - wrist.x, middleMCP.y - wrist.y);
+
+      // Thumb Extension Check (Distance from Index MCP)
+      const thumbDist = Math.hypot(thumbTip.x - indexMCP.x, thumbTip.y - indexMCP.y);
+      const isThumbExtended = thumbDist > (scale * 0.6); // Threshold relative to hand size
+
+      // Thumb Vertical Check (for Thumbs Up)
+      const isThumbUpVertical = thumbTip.y < thumbIP.y;
+
+      // 1. NEXT = Thumbs Up (Strict)
+      // Thumb UP, Others DOWN
+      if (fingersUpCount === 0 && isThumbUpVertical && isThumbExtended) return "NEXT";
+
+      // 2. BACK = Open Palm (5 Fingers)
+      // All 5 fingers UP/Extended
+      if (fingersUpCount === 4 && isThumbExtended) return "BACK";
+
+      // 3. Options A, B, C, D
+      if (fingersUpCount === 1 && indexUp) return "1"; // A
+      if (fingersUpCount === 2 && indexUp && middleUp) return "2"; // B
+      if (fingersUpCount === 3 && indexUp && middleUp && ringUp) return "3"; // C
       
-      if (count === 4 && isThumbUp) return "BACK";
-      if (count <= 1 && isThumbUp) return "NEXT";
-      if (count === 1 && indexUp) return "1";
-      if (count === 2 && indexUp && middleUp) return "2";
-      if (count === 3 && indexUp && middleUp && ringUp) return "3";
-      if (count === 4 && !isThumbUp) return "4";
+      // D = 4 Fingers (Thumb Tucked)
+      // 4 Fingers UP, Thumb NOT Extended
+      if (fingersUpCount === 4 && !isThumbExtended) return "4"; // D
       
       return null;
   };
@@ -211,7 +261,7 @@ export const useHandGesture = (
   // --- 5. DWELL TIME LOGIC ---
   const handleDwellTime = (gesture: string | null) => {
      const now = performance.now();
-     const DWELL_DURATION = 1600; 
+     const DWELL_DURATION = 1600; // 1.6s
      
      if (gesture && gesture === lastGestureRef.current) {
         const duration = now - gestureStartTimeRef.current;
@@ -220,9 +270,9 @@ export const useHandGesture = (
         setState(prev => ({ ...prev, detectedGesture: gesture, dwellProgress: progress }));
 
         if (duration > DWELL_DURATION && !hasTriggeredRef.current) {
-           onTrigger(gesture);
+           onTriggerRef.current(gesture);
            hasTriggeredRef.current = true;
-           if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(50);
+           if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate([50, 50, 50]); // Burst vibrate
         }
      } else {
         lastGestureRef.current = gesture;
@@ -243,16 +293,22 @@ export const useHandGesture = (
   };
 
   const drawHand = (ctx: CanvasRenderingContext2D, landmarks: any[], color: string) => {
+      // Neon Glow Effect
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 10;
       ctx.strokeStyle = color;
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
       ctx.beginPath();
 
       const connections = [
-          [0, 1], [1, 2], [2, 3], [3, 4], 
-          [0, 5], [5, 6], [6, 7], [7, 8], 
-          [0, 9], [9, 10], [10, 11], [11, 12], 
-          [0, 13], [13, 14], [14, 15], [15, 16], 
-          [0, 17], [17, 18], [18, 19], [19, 20] 
+          [0, 1], [1, 2], [2, 3], [3, 4], // Thumb
+          [0, 5], [5, 6], [6, 7], [7, 8], // Index
+          [0, 9], [9, 10], [10, 11], [11, 12], // Middle
+          [0, 13], [13, 14], [14, 15], [15, 16], // Ring
+          [0, 17], [17, 18], [18, 19], [19, 20] // Pinky
       ];
 
       for (const [start, end] of connections) {
@@ -262,7 +318,18 @@ export const useHandGesture = (
           ctx.lineTo(p2.x * ctx.canvas.width, p2.y * ctx.canvas.height);
       }
       ctx.stroke();
+      
+      // Draw Joints (Nodes)
+      ctx.fillStyle = '#ffffff';
+      for (const landmark of landmarks) {
+          ctx.beginPath();
+          ctx.arc(landmark.x * ctx.canvas.width, landmark.y * ctx.canvas.height, 2, 0, 2 * Math.PI);
+          ctx.fill();
+      }
+      
+      // Reset Shadow
+      ctx.shadowBlur = 0;
   };
 
-  return { videoRef, canvasRef, ...state };
+  return { videoRef, canvasRef, isHandDetected, ...state };
 };

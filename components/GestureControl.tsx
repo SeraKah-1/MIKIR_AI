@@ -2,7 +2,7 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useHandGesture } from '../hooks/useHandGesture';
-import { Camera, Hand } from 'lucide-react';
+import { Camera } from 'lucide-react';
 
 interface GestureControlProps {
   onOptionSelect: (index: number) => void;
@@ -34,7 +34,6 @@ export const GestureControl: React.FC<GestureControlProps> = ({
 
   if (error) return null;
 
-  // Helper to get display text
   const getGestureLabel = (g: string | null) => {
       if (!g) return "";
       if (g === 'NEXT') return "LANJUT";
@@ -49,78 +48,85 @@ export const GestureControl: React.FC<GestureControlProps> = ({
   const displayLabel = getGestureLabel(detectedGesture);
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end pointer-events-none">
-       {/* CAMERA FEED (Optimized Size) */}
+    <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end pointer-events-none gap-4">
+       
+       {/* FEEDBACK BUBBLE (Modern & Clean) */}
+       <AnimatePresence>
+          {detectedGesture && (
+             <motion.div 
+               initial={{ y: 20, opacity: 0, scale: 0.8, filter: "blur(4px)" }}
+               animate={{ y: 0, opacity: 1, scale: 1, filter: "blur(0px)" }}
+               exit={{ y: 10, opacity: 0, scale: 0.9, filter: "blur(2px)" }}
+               transition={{ type: "spring", stiffness: 300, damping: 25 }}
+               className="bg-white/90 backdrop-blur-xl border border-slate-100 shadow-[0_8px_30px_rgb(0,0,0,0.08)] rounded-2xl p-3 pr-5 flex items-center gap-4 pointer-events-auto"
+             >
+                {/* Progress Ring mimicking the A/B/C/D buttons */}
+                <div className="relative w-12 h-12 flex items-center justify-center bg-slate-50 rounded-full shadow-inner">
+                   <svg className="absolute inset-0 w-full h-full transform -rotate-90">
+                      <circle cx="24" cy="24" r="20" stroke="#f1f5f9" strokeWidth="4" fill="transparent" />
+                      <circle 
+                        cx="24" cy="24" r="20" 
+                        stroke="#8b5cf6" /* Menggunakan warna ungu/indigo soft sesuai gradien atas app lu */
+                        strokeWidth="4" 
+                        fill="transparent"
+                        strokeDasharray={125}
+                        strokeDashoffset={125 - ((dwellProgress / 100) * 125)}
+                        strokeLinecap="round"
+                        className="transition-all duration-75 ease-linear"
+                      />
+                   </svg>
+                   <span className="absolute text-xl font-bold text-slate-700">
+                      {['LANJUT', 'KEMBALI'].includes(displayLabel) ? (displayLabel === 'LANJUT' ? '⏭' : '⏮') : displayLabel}
+                   </span>
+                </div>
+                
+                <div className="flex flex-col">
+                   <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-0.5">
+                      {detectedGesture === 'NEXT' || detectedGesture === 'BACK' ? 'Navigasi' : 'Pilihan'}
+                   </span>
+                   <span className="text-sm font-bold text-slate-700 leading-tight">
+                      {dwellProgress >= 100 ? "Terkonfirmasi" : "Tahan..."}
+                   </span>
+                </div>
+             </motion.div>
+          )}
+       </AnimatePresence>
+
+       {/* CAMERA FEED (Glassmorphism & Full Color) */}
        <motion.div 
-         initial={{ scale: 0.8, opacity: 0 }}
+         initial={{ scale: 0.9, opacity: 0 }}
          animate={{ scale: 1, opacity: 1 }}
-         className="relative w-32 h-24 md:w-40 md:h-32 bg-black rounded-2xl overflow-hidden shadow-xl border border-white/20 pointer-events-auto"
+         className="relative w-32 h-24 md:w-48 md:h-36 bg-black/5 backdrop-blur-sm rounded-2xl overflow-hidden shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-white/50 pointer-events-auto"
        >
           <video 
              ref={videoRef} 
              autoPlay 
              playsInline 
              muted 
-             className="absolute inset-0 w-full h-full object-cover transform -scale-x-100 opacity-80" 
+             className="absolute inset-0 w-full h-full object-cover transform -scale-x-100" 
           />
           <canvas 
              ref={canvasRef} 
              className="absolute inset-0 w-full h-full transform -scale-x-100" 
           />
           
-          <div className="absolute bottom-0 left-0 w-full text-center bg-black/50 py-0.5">
-             {!detectedGesture && (
-                <span className="text-[8px] text-white/80 font-bold uppercase tracking-wider">
-                   Gesture Active
-                </span>
-             )}
+          {/* ROI Overlay Box (Area Deteksi) */}
+          <div className="absolute top-[25%] left-[30%] w-[40%] h-[50%] border-2 border-dashed border-white/60 rounded-lg pointer-events-none box-border shadow-[0_0_15px_rgba(0,0,0,0.2)]">
+              <div className="absolute -top-1 -left-1 w-2 h-2 border-t-2 border-l-2 border-emerald-400"></div>
+              <div className="absolute -top-1 -right-1 w-2 h-2 border-t-2 border-r-2 border-emerald-400"></div>
+              <div className="absolute -bottom-1 -left-1 w-2 h-2 border-b-2 border-l-2 border-emerald-400"></div>
+              <div className="absolute -bottom-1 -right-1 w-2 h-2 border-b-2 border-r-2 border-emerald-400"></div>
           </div>
 
+          {/* Subtle Indicator */}
+          <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+
           {!isLoaded && (
-             <div className="absolute inset-0 flex items-center justify-center bg-slate-900/80">
-                <Camera className="animate-pulse text-indigo-400" size={20} />
+             <div className="absolute inset-0 flex items-center justify-center bg-slate-100/80 backdrop-blur-sm">
+                <Camera className="animate-pulse text-slate-400" size={20} />
              </div>
           )}
        </motion.div>
-
-       {/* FEEDBACK BUBBLE (Restored Clear Visuals) */}
-       <AnimatePresence>
-          {detectedGesture && (
-             <motion.div 
-               initial={{ y: 20, opacity: 0, scale: 0.9 }}
-               animate={{ y: -10, opacity: 1, scale: 1 }}
-               exit={{ y: 0, opacity: 0, scale: 0.9 }}
-               className="bg-white/95 backdrop-blur-sm border border-slate-200 shadow-xl rounded-2xl p-4 flex items-center gap-4 absolute bottom-28 md:bottom-36 right-0"
-             >
-                {/* Progress Ring with Big Text Inside */}
-                <div className="relative w-14 h-14 flex items-center justify-center">
-                   <svg className="w-full h-full transform -rotate-90">
-                      <circle cx="28" cy="28" r="24" stroke="#e2e8f0" strokeWidth="4" fill="transparent" />
-                      <circle 
-                        cx="28" cy="28" r="24" 
-                        stroke="#4f46e5" strokeWidth="4" fill="transparent"
-                        strokeDasharray={150}
-                        strokeDashoffset={150 - (dwellProgress * 1.5)}
-                        strokeLinecap="round"
-                        className="transition-all duration-75 ease-linear"
-                      />
-                   </svg>
-                   <span className="absolute text-2xl font-black text-slate-800">
-                      {displayLabel}
-                   </span>
-                </div>
-                
-                <div className="flex flex-col">
-                   <span className="text-[10px] uppercase font-bold text-slate-400 leading-none mb-1">
-                      {detectedGesture === 'NEXT' ? 'Navigasi' : 'Pilihan Jawaban'}
-                   </span>
-                   <span className="text-sm font-bold text-indigo-600 leading-tight whitespace-nowrap">
-                      {dwellProgress >= 100 ? "Memproses..." : "Tahan Posisi..."}
-                   </span>
-                </div>
-             </motion.div>
-          )}
-       </AnimatePresence>
     </div>
   );
 };

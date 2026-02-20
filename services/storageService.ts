@@ -77,6 +77,7 @@ export const saveApiKeysPool = (provider: AiProvider, keys: string[]) => {
 };
 
 export const getApiKey = (provider: AiProvider = 'gemini'): string | null => {
+  // 1. Check Pool (LocalStorage) - Highest Priority (Keycard Multi-key)
   const poolKey = provider === 'gemini' ? GEMINI_KEYS_POOL : GROQ_KEYS_POOL;
   const rawPool = localStorage.getItem(poolKey);
   if (rawPool) {
@@ -88,8 +89,39 @@ export const getApiKey = (provider: AiProvider = 'gemini'): string | null => {
        }
     } catch (e) { console.warn("Failed to parse key pool", e); }
   }
-  if (provider === 'gemini') return localStorage.getItem(GEMINI_KEY_STORAGE);
-  else return localStorage.getItem(GROQ_KEY_STORAGE);
+
+  // 2. Check Single Key (LocalStorage) - Priority (Keycard Single-key / Manual Input)
+  let storedKey = null;
+  if (provider === 'gemini') storedKey = localStorage.getItem(GEMINI_KEY_STORAGE);
+  else storedKey = localStorage.getItem(GROQ_KEY_STORAGE);
+
+  if (storedKey) return storedKey;
+
+  // 3. Fallback to Environment Variables (.env)
+  // This allows developers or deployments with env vars to work without keycard
+  if (provider === 'gemini') {
+      // Check standard Vite env vars first (exposed via define in vite.config.ts)
+      if (typeof process !== 'undefined' && process.env) {
+          if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY;
+          if (process.env.API_KEY) return process.env.API_KEY;
+      }
+      // Check import.meta.env for Vite (if process.env is polyfilled but empty)
+      if (import.meta.env && import.meta.env.VITE_GEMINI_API_KEY) {
+          return import.meta.env.VITE_GEMINI_API_KEY;
+      }
+  } 
+  
+  // Groq env var support (optional)
+  if (provider === 'groq') {
+      if (typeof process !== 'undefined' && process.env && process.env.GROQ_API_KEY) {
+          return process.env.GROQ_API_KEY;
+      }
+      if (import.meta.env && import.meta.env.VITE_GROQ_API_KEY) {
+          return import.meta.env.VITE_GROQ_API_KEY;
+      }
+  }
+
+  return null;
 };
 
 export const removeApiKey = (provider: AiProvider) => {
