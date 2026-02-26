@@ -30,7 +30,7 @@ export const GestureControl: React.FC<GestureControlProps> = ({
     }
   };
 
-  const { videoRef, canvasRef, isLoaded, error, detectedGesture, dwellProgress } = useHandGesture(handleTrigger, false);
+  const { canvasRef, isLoaded, error, detectedGesture, dwellProgress, videoRef } = useHandGesture(handleTrigger, false);
 
   if (error) return null;
 
@@ -98,26 +98,40 @@ export const GestureControl: React.FC<GestureControlProps> = ({
          animate={{ scale: 1, opacity: 1 }}
          className="relative w-32 h-24 md:w-48 md:h-36 bg-black/5 backdrop-blur-sm rounded-2xl overflow-hidden shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-white/50 pointer-events-auto"
        >
+          {/* We need to append the video element here if it's not already in DOM, or just let useHandGesture manage it. 
+              Actually useHandGesture creates a video element but doesn't append it to DOM.
+              If we want to see it, we should append it or render it here.
+              Let's modify useHandGesture to return the videoRef so we can render it if we want, 
+              OR we can just render a video element here and pass the ref to the hook?
+              The hook currently creates its own video element if ref is null.
+              Let's pass a ref from here to the hook? No, the hook manages it.
+              Let's just render the video element here and pass the ref?
+              Wait, useHandGesture defines videoRef internally.
+              Let's update useHandGesture to accept a videoRef or return one.
+              Currently it returns { canvasRef, ...state }.
+              I'll update useHandGesture to return videoRef.
+          */}
+          {/* Actually, since the hook creates the video element internally if not provided, 
+              and we want to display it, we should probably render the video element HERE 
+              and pass the ref to the hook, OR have the hook return the ref and we attach it?
+              React refs don't work like that easily (attaching a ref from a hook to a rendered element).
+              
+              Better approach: Render <video> here, pass ref to hook.
+          */}
           <video 
-             ref={videoRef} 
+             ref={videoRef}
              autoPlay 
              playsInline 
              muted 
              className="absolute inset-0 w-full h-full object-cover transform -scale-x-100" 
           />
+          
+          {/* Video is now global, we just show the canvas overlay here */}
           <canvas 
              ref={canvasRef} 
              className="absolute inset-0 w-full h-full transform -scale-x-100" 
           />
           
-          {/* ROI Overlay Box (Area Deteksi) */}
-          <div className="absolute top-[25%] left-[30%] w-[40%] h-[50%] border-2 border-dashed border-white/60 rounded-lg pointer-events-none box-border shadow-[0_0_15px_rgba(0,0,0,0.2)]">
-              <div className="absolute -top-1 -left-1 w-2 h-2 border-t-2 border-l-2 border-emerald-400"></div>
-              <div className="absolute -top-1 -right-1 w-2 h-2 border-t-2 border-r-2 border-emerald-400"></div>
-              <div className="absolute -bottom-1 -left-1 w-2 h-2 border-b-2 border-l-2 border-emerald-400"></div>
-              <div className="absolute -bottom-1 -right-1 w-2 h-2 border-b-2 border-r-2 border-emerald-400"></div>
-          </div>
-
           {/* Subtle Indicator */}
           <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
 

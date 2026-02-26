@@ -5,8 +5,9 @@ import { LogOut, Heart, Clock, AlertTriangle, SkipForward, X, ArrowLeft, Chevron
 import { Question, QuizResult, QuizMode } from '../types';
 import { useGameSound } from '../hooks/useGameSound';
 import { GestureControl } from './GestureControl';
-import { getGestureEnabled, addToGraveyard } from '../services/storageService';
+import { getGestureEnabled, getEyeTrackingEnabled, addToGraveyard } from '../services/storageService';
 import { UniversalQuestionCard } from './UniversalQuestionCard'; 
+import { EyeTrackingManager } from './EyeTrackingManager';
 import confetti from 'canvas-confetti';
 
 interface QuizInterfaceProps {
@@ -47,10 +48,41 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
   const [kaomojiState, setKaomojiState] = useState(KAO.IDLE);
   const [flashType, setFlashType] = useState<'none' | 'success' | 'error'>('none');
   const [isGestureEnabled, setIsGestureEnabled] = useState(false);
+  const [isEyeTrackingEnabled, setIsEyeTrackingEnabled] = useState(false);
   
   const { playCorrect, playIncorrect, playClick } = useGameSound();
 
-  useEffect(() => { setIsGestureEnabled(getGestureEnabled()); }, []);
+  useEffect(() => { 
+      // Ensure only one is enabled at startup if both were saved as true
+      const savedGesture = getGestureEnabled();
+      const savedEye = getEyeTrackingEnabled();
+      
+      if (savedGesture) {
+          setIsGestureEnabled(true);
+          setIsEyeTrackingEnabled(false);
+      } else if (savedEye) {
+          setIsEyeTrackingEnabled(true);
+          setIsGestureEnabled(false);
+      }
+  }, []);
+
+  const toggleEyeTracking = () => {
+      if (!isEyeTrackingEnabled) {
+          setIsEyeTrackingEnabled(true);
+          setIsGestureEnabled(false); // Disable gesture if eye tracking is enabled
+      } else {
+          setIsEyeTrackingEnabled(false);
+      }
+  };
+
+  const toggleGesture = () => {
+      if (!isGestureEnabled) {
+          setIsGestureEnabled(true);
+          setIsEyeTrackingEnabled(false); // Disable eye tracking if gesture is enabled
+      } else {
+          setIsGestureEnabled(false);
+      }
+  };
 
   const currentQuestion = questions[currentIndex];
   // Calculate progress for worm bar (width in percentage)
@@ -229,14 +261,25 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
 
             {/* RIGHT: Stats & Tools */}
             <div className="flex flex-col items-end gap-2">
-                {/* GESTURE TOGGLE BUTTON */}
-                <button 
-                    onClick={() => setIsGestureEnabled(!isGestureEnabled)}
-                    className={`p-2 rounded-xl border shadow-sm transition-all active:scale-95 ${isGestureEnabled ? 'bg-purple-500 text-white border-purple-600 shadow-purple-500/20' : 'bg-white text-slate-300 border-slate-200 hover:text-purple-500 hover:border-purple-200'}`}
-                    title="Gesture Control (Hand)"
-                >
-                    <Hand size={16} strokeWidth={2.5} />
-                </button>
+                <div className="flex items-center gap-2">
+                    {/* EYE TRACKING TOGGLE BUTTON */}
+                    <button 
+                        onClick={toggleEyeTracking}
+                        className={`px-3 py-1.5 rounded-xl border shadow-sm transition-all active:scale-95 text-xs font-bold flex items-center gap-1.5 ${isEyeTrackingEnabled ? 'bg-emerald-500 text-white border-emerald-600 shadow-emerald-500/20' : 'bg-white text-slate-400 border-slate-200 hover:text-emerald-500 hover:border-emerald-200'}`}
+                        title="Eye Tracking (Beta)"
+                    >
+                        <span>👁️</span> <span className="hidden sm:inline">Beta Input</span>
+                    </button>
+
+                    {/* GESTURE TOGGLE BUTTON */}
+                    <button 
+                        onClick={toggleGesture}
+                        className={`p-2 rounded-xl border shadow-sm transition-all active:scale-95 ${isGestureEnabled ? 'bg-purple-500 text-white border-purple-600 shadow-purple-500/20' : 'bg-white text-slate-300 border-slate-200 hover:text-purple-500 hover:border-purple-200'}`}
+                        title="Gesture Control (Hand)"
+                    >
+                        <Hand size={16} strokeWidth={2.5} />
+                    </button>
+                </div>
 
                 {mode === QuizMode.SURVIVAL && (
                     <div className={`flex items-center font-black px-3 py-1.5 rounded-xl text-xs border ${lives === 1 ? 'bg-rose-500 text-white border-rose-600' : 'bg-white text-rose-500 border-rose-100 shadow-sm'}`}>
@@ -290,6 +333,15 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
 
         {isGestureEnabled && (
             <GestureControl 
+                onOptionSelect={(idx) => handleAnswer(idx, idx === currentQuestion.correctIndex)}
+                onNext={handleNext}
+                onPrev={handlePrev}
+                isAnswered={isAnswered}
+            />
+        )}
+
+        {isEyeTrackingEnabled && (
+            <EyeTrackingManager 
                 onOptionSelect={(idx) => handleAnswer(idx, idx === currentQuestion.correctIndex)}
                 onNext={handleNext}
                 onPrev={handlePrev}

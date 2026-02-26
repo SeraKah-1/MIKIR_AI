@@ -69,6 +69,7 @@ export const UniversalQuestionCard: React.FC<UniversalCardProps> = ({
         return (
           <button
             key={idx}
+            data-option-index={idx}
             disabled={isAnswered}
             onClick={() => onAnswer(idx, idx === question.correctIndex)}
             onMouseEnter={!isAnswered ? playHover : undefined}
@@ -121,6 +122,7 @@ export const UniversalQuestionCard: React.FC<UniversalCardProps> = ({
                 return (
                     <button
                         key={opt.label}
+                        data-option-index={opt.val}
                         disabled={isAnswered}
                         onClick={() => onAnswer(opt.val, isCorrect)}
                         className={`flex-1 rounded-3xl flex flex-col items-center justify-center gap-3 btn-tactile ${activeClass}`}

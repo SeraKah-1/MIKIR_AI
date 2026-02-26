@@ -22,14 +22,24 @@ const GROQ_KEYS_POOL = 'glassquiz_groq_keys_pool';
 const STORAGE_PREF_KEY = 'glassquiz_storage_pref';
 const SUPABASE_CONFIG_KEY = 'glassquiz_supabase_config';
 const GESTURE_ENABLED_KEY = 'glassquiz_gesture_enabled';
+const EYE_TRACKING_ENABLED_KEY = 'glassquiz_eye_tracking_enabled';
 
-// --- SETTINGS (GESTURE) ---
+// --- SETTINGS (GESTURE & EYE TRACKING) ---
 export const saveGestureEnabled = (enabled: boolean) => {
     localStorage.setItem(GESTURE_ENABLED_KEY, JSON.stringify(enabled));
 };
 
 export const getGestureEnabled = (): boolean => {
     const raw = localStorage.getItem(GESTURE_ENABLED_KEY);
+    return raw ? JSON.parse(raw) : false; 
+};
+
+export const saveEyeTrackingEnabled = (enabled: boolean) => {
+    localStorage.setItem(EYE_TRACKING_ENABLED_KEY, JSON.stringify(enabled));
+};
+
+export const getEyeTrackingEnabled = (): boolean => {
+    const raw = localStorage.getItem(EYE_TRACKING_ENABLED_KEY);
     return raw ? JSON.parse(raw) : false; 
 };
 
@@ -53,12 +63,12 @@ export const getGraveyard = (): any[] => {
   } catch (e) { return []; }
 };
 
-export const removeFromGraveyard = (questionId: number) => {
+export const removeFromGraveyard = (text: string) => {
   try {
     const raw = localStorage.getItem(GRAVEYARD_KEY);
     if (raw) {
       const graveyard = JSON.parse(raw);
-      const newGraveyard = graveyard.filter((q: any) => q.id !== questionId);
+      const newGraveyard = graveyard.filter((q: any) => q.text !== text);
       localStorage.setItem(GRAVEYARD_KEY, JSON.stringify(newGraveyard));
     }
   } catch (e) { console.error("Gagal membangkitkan soal", e); }

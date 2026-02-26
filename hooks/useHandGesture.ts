@@ -16,6 +16,7 @@ export const useHandGesture = (
   onTrigger: (gesture: string) => void,
   isPaused: boolean
 ) => {
+  const videoRef = useRef<HTMLVideoElement>(null);
   const onTriggerRef = useRef(onTrigger);
   
   useEffect(() => {
@@ -31,7 +32,6 @@ export const useHandGesture = (
   
   const [isHandDetected, setIsHandDetected] = useState(false);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const landmarkerRef = useRef<any>(null);
   const requestRef = useRef<number>(0);
@@ -76,6 +76,7 @@ export const useHandGesture = (
 
         if (active) {
             setState(prev => ({ ...prev, isLoaded: true }));
+            startCamera();
         }
         
       } catch (err: any) {
@@ -95,51 +96,52 @@ export const useHandGesture = (
           landmarkerRef.current.close();
           landmarkerRef.current = null;
       }
+      cancelAnimationFrame(requestRef.current);
     };
   }, []);
 
-  // --- 2. CAMERA SETUP (Triggered when Loaded) ---
-  useEffect(() => {
-      if (state.isLoaded && videoRef.current && !videoRef.current.srcObject) {
-          startCamera();
+  const startCamera = async (retryCount = 0) => {
+      // Create a video element if it doesn't exist (since we don't render it in hook)
+      if (!videoRef.current) {
+          const video = document.createElement('video');
+          video.autoplay = true;
+          video.playsInline = true;
+          video.muted = true;
+          // @ts-ignore
+          videoRef.current = video;
       }
-  }, [state.isLoaded]);
 
-  const startCamera = async () => {
-    if (!videoRef.current) {
-        // Retry once if ref is not ready (React render timing)
-        setTimeout(() => {
-            if (videoRef.current && !videoRef.current.srcObject) startCamera();
-        }, 500);
-        return;
-    }
-    
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-          video: { 
-             width: 320, 
-             height: 240,
-             facingMode: "user",
-             frameRate: { ideal: 30 }
-          } 
-      });
-      
-      if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          videoRef.current.addEventListener('loadeddata', predictWebcam);
+      try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+              video: {
+                  width: { ideal: 640 },
+                  height: { ideal: 480 },
+                  facingMode: "user",
+                  frameRate: { ideal: 30 }
+              }
+          });
+
+          if (videoRef.current) {
+              videoRef.current.srcObject = stream;
+              await videoRef.current.play();
+              requestRef.current = requestAnimationFrame(predictWebcam);
+          }
+      } catch (err) {
+          console.error("Camera Error:", err);
+          if (retryCount < 3) {
+              setTimeout(() => startCamera(retryCount + 1), 1000);
+          } else {
+              setState(prev => ({ ...prev, error: "Gagal akses kamera." }));
+          }
       }
-    } catch (err) {
-      console.error("Camera Error:", err);
-      setState(prev => ({ ...prev, error: "Akses kamera ditolak. Izinkan akses di browser." }));
-    }
   };
 
   const stopCamera = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-       const stream = videoRef.current.srcObject as MediaStream;
-       stream.getTracks().forEach(track => track.stop());
-    }
-    cancelAnimationFrame(requestRef.current);
+      if (videoRef.current && videoRef.current.srcObject) {
+          const stream = videoRef.current.srcObject as MediaStream;
+          stream.getTracks().forEach(t => t.stop());
+          videoRef.current.srcObject = null;
+      }
   };
 
   // --- 3. DETECTION LOOP (THROTTLED) ---
@@ -164,8 +166,9 @@ export const useHandGesture = (
             canvas.height = video.videoHeight;
             
             // --- DRAW ROI BOX (Centered) ---
-            const roiW = canvas.width * 0.4; // 40% width
-            const roiH = canvas.height * 0.5; // 50% height
+            // Increased ROI size as requested ("Kotak inputnya kekecilan")
+            const roiW = canvas.width * 0.6; // 60% width (was 40%)
+            const roiH = canvas.height * 0.7; // 70% height (was 50%)
             const roiX = (canvas.width - roiW) / 2; // Centered X
             const roiY = (canvas.height - roiH) / 2; // Centered Y
 
@@ -181,13 +184,25 @@ export const useHandGesture = (
                   
                   // --- 1. Check ROI ---
                   const wrist = landmarks[0];
-                  const inROI = (wrist.x * canvas.width > roiX) && 
-                                (wrist.x * canvas.width < roiX + roiW) &&
-                                (wrist.y * canvas.height > roiY) &&
-                                (wrist.y * canvas.height < roiY + roiH);
+                  // Use a more forgiving ROI check (center of hand instead of just wrist)
+                  const middleMCP = landmarks[9];
+                  const handCenterX = (wrist.x + middleMCP.x) / 2;
+                  const handCenterY = (wrist.y + middleMCP.y) / 2;
+
+                  const inROI = (handCenterX * canvas.width > roiX) && 
+                                (handCenterX * canvas.width < roiX + roiW) &&
+                                (handCenterY * canvas.height > roiY) &&
+                                (handCenterY * canvas.height < roiY + roiH);
 
                   // Draw Skeleton (Neon Style)
                   drawHand(ctx, landmarks, inROI ? '#00ffcc' : '#f43f5e');
+
+                  // Draw ROI Box Visual
+                  ctx.strokeStyle = inROI ? 'rgba(0, 255, 204, 0.5)' : 'rgba(255, 255, 255, 0.3)';
+                  ctx.lineWidth = 2;
+                  ctx.setLineDash([10, 10]);
+                  ctx.strokeRect(roiX, roiY, roiW, roiH);
+                  ctx.setLineDash([]);
 
                   if (inROI && !isPaused) {
                     const gesture = recognizeGesture(landmarks);
@@ -206,62 +221,100 @@ export const useHandGesture = (
     requestRef.current = requestAnimationFrame(predictWebcam);
   };
 
-  // --- 4. GESTURE RECOGNITION MATH ---
+  // --- 4. GESTURE RECOGNITION MATH (ROTATION INVARIANT) ---
   const recognizeGesture = (landmarks: any[]) => {
-      // Finger Tips: 4 (Thumb), 8 (Index), 12 (Middle), 16 (Ring), 20 (Pinky)
-      // Finger PIP (Joint 2): 6, 10, 14, 18
-      
-      const isFingerUp = (tipIdx: number, pipIdx: number) => {
-         return landmarks[tipIdx].y < landmarks[pipIdx].y; 
+      // Helper: Calculate Euclidean distance between two landmarks
+      const dist = (p1: any, p2: any) => {
+          return Math.hypot(p1.x - p2.x, p1.y - p2.y);
       };
 
-      const indexUp = isFingerUp(8, 6);
-      const middleUp = isFingerUp(12, 10);
-      const ringUp = isFingerUp(16, 14);
-      const pinkyUp = isFingerUp(20, 18);
-
-      const fingersUpCount = (indexUp?1:0) + (middleUp?1:0) + (ringUp?1:0) + (pinkyUp?1:0);
-
-      const thumbTip = landmarks[4];
-      const thumbIP = landmarks[3];
-      const indexMCP = landmarks[5];
       const wrist = landmarks[0];
+      const thumbTip = landmarks[4];
+      const indexTip = landmarks[8];
+      const indexPIP = landmarks[6];
+      const middleTip = landmarks[12];
+      const middlePIP = landmarks[10];
+      const ringTip = landmarks[16];
+      const ringPIP = landmarks[14];
+      const pinkyTip = landmarks[20];
+      const pinkyPIP = landmarks[18];
+
+      // Reference Scale: Distance from Wrist to Middle Finger MCP (Knuckle)
       const middleMCP = landmarks[9];
+      const handScale = dist(wrist, middleMCP);
 
-      // Calculate Scale (Wrist to Middle MCP)
-      const scale = Math.hypot(middleMCP.x - wrist.x, middleMCP.y - wrist.y);
-
-      // Thumb Extension Check (Distance from Index MCP)
-      const thumbDist = Math.hypot(thumbTip.x - indexMCP.x, thumbTip.y - indexMCP.y);
-      const isThumbExtended = thumbDist > (scale * 0.6); // Threshold relative to hand size
-
-      // Thumb Vertical Check (for Thumbs Up)
-      const isThumbUpVertical = thumbTip.y < thumbIP.y;
-
-      // 1. NEXT = Thumbs Up (Strict)
-      // Thumb UP, Others DOWN
-      if (fingersUpCount === 0 && isThumbUpVertical && isThumbExtended) return "NEXT";
-
-      // 2. BACK = Open Palm (5 Fingers)
-      // All 5 fingers UP/Extended
-      if (fingersUpCount === 4 && isThumbExtended) return "BACK";
-
-      // 3. Options A, B, C, D
-      if (fingersUpCount === 1 && indexUp) return "1"; // A
-      if (fingersUpCount === 2 && indexUp && middleUp) return "2"; // B
-      if (fingersUpCount === 3 && indexUp && middleUp && ringUp) return "3"; // C
+      // --- 1. Detect Extended Fingers (Geometric & Rotation Invariant) ---
+      // A finger is extended if the Tip is further from the Wrist than the PIP joint is.
+      // We add a small buffer (0.1 * scale) to be robust against slight bends.
       
-      // D = 4 Fingers (Thumb Tucked)
-      // 4 Fingers UP, Thumb NOT Extended
-      if (fingersUpCount === 4 && !isThumbExtended) return "4"; // D
+      const isExtended = (tip: any, pip: any) => {
+          return dist(tip, wrist) > dist(pip, wrist) + (handScale * 0.1);
+      };
+
+      const indexExt = isExtended(indexTip, indexPIP);
+      const middleExt = isExtended(middleTip, middlePIP);
+      const ringExt = isExtended(ringTip, ringPIP);
+      const pinkyExt = isExtended(pinkyTip, pinkyPIP);
+
+      // --- 2. Detect Thumb State ---
+      // Thumb is tricky. We check if it's "out" (away from the hand center).
+      // We compare ThumbTip distance to PinkyMCP vs IndexMCP distance to PinkyMCP.
+      const pinkyMCP = landmarks[17];
+      const thumbOut = dist(thumbTip, pinkyMCP) > dist(indexTip, pinkyMCP) * 0.8;
       
+      // Alternative Thumb Check: Angle based? 
+      // Simple check: Is thumb tip far from index MCP?
+      const indexMCP = landmarks[5];
+      const thumbExtended = dist(thumbTip, indexMCP) > handScale * 0.5;
+
+      // Count extended fingers (excluding thumb for now)
+      const fingersCount = (indexExt ? 1 : 0) + (middleExt ? 1 : 0) + (ringExt ? 1 : 0) + (pinkyExt ? 1 : 0);
+
+      // --- 3. Map Shapes to Gestures ---
+
+      // GESTURE: "NEXT" -> Thumbs Up (or Thumb Out)
+      // Shape: Thumb Extended, 0 other fingers extended.
+      // Works in any orientation (Thumbs Up, Thumbs Down, Thumbs Side).
+      if (fingersCount === 0 && thumbExtended) {
+          return "NEXT";
+      }
+
+      // GESTURE: "BACK" -> Open Palm (5 Fingers)
+      // Shape: All 4 fingers extended + Thumb extended
+      if (fingersCount === 4 && thumbExtended) {
+          return "BACK";
+      }
+
+      // GESTURE: "1" (Option A) -> Index Only
+      if (fingersCount === 1 && indexExt) {
+          return "1";
+      }
+
+      // GESTURE: "2" (Option B) -> Index + Middle (Peace Sign)
+      if (fingersCount === 2 && indexExt && middleExt) {
+          return "2";
+      }
+
+      // GESTURE: "3" (Option C) -> Index + Middle + Ring
+      if (fingersCount === 3 && indexExt && middleExt && ringExt) {
+          return "3";
+      }
+
+      // GESTURE: "4" (Option D) -> 4 Fingers (Thumb Tucked)
+      if (fingersCount === 4 && !thumbExtended) {
+          return "4";
+      }
+
+      // GESTURE: "Fist" (All Closed) -> Maybe ignore or map to something else?
+      // Currently returns null.
+
       return null;
   };
 
   // --- 5. DWELL TIME LOGIC ---
   const handleDwellTime = (gesture: string | null) => {
      const now = performance.now();
-     const DWELL_DURATION = 1600; // 1.6s
+     const DWELL_DURATION = 1200; // 1.2s (was 1.6s) for snappier feel
      
      if (gesture && gesture === lastGestureRef.current) {
         const duration = now - gestureStartTimeRef.current;
@@ -331,5 +384,5 @@ export const useHandGesture = (
       ctx.shadowBlur = 0;
   };
 
-  return { videoRef, canvasRef, isHandDetected, ...state };
+  return { canvasRef, isHandDetected, videoRef, ...state };
 };

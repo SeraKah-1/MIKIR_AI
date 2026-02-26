@@ -175,8 +175,8 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) =
      });
   };
 
-  const handleBanish = (id: number) => {
-     removeFromGraveyard(id);
+  const handleBanish = (text: string) => {
+     removeFromGraveyard(text);
      refreshGraveyard();
   };
 
@@ -290,8 +290,8 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) =
                   </div>
                ) : (
                   <div className="grid grid-cols-1 gap-3">
-                     {libraryItems.map((item) => (
-                        <div key={item.id} className="group flex items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl hover:shadow-md hover:border-indigo-200 transition-all">
+                     {libraryItems.map((item, idx) => (
+                        <div key={`${item.id}-${idx}`} className="group flex items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl hover:shadow-md hover:border-indigo-200 transition-all">
                            <div className="flex items-center gap-4 overflow-hidden">
                               <div className={`p-3 rounded-xl shrink-0 ${item.type === 'pdf' ? 'bg-rose-50 text-rose-500' : 'bg-emerald-50 text-emerald-500'}`}>
                                  <FileText size={20} />
@@ -351,10 +351,10 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) =
                   {filteredQuizzes.length === 0 ? (
                      <div className="text-center py-10 text-slate-400 text-sm">Tidak ada data quiz.</div>
                   ) : (
-                     filteredQuizzes.map((quiz) => {
+                     filteredQuizzes.map((quiz, idx) => {
                         const scoreColor = getScoreColor(quiz.lastScore);
                         return (
-                           <div key={quiz.id} onClick={() => onLoadHistory(quiz)} className="bg-white border border-slate-200 p-4 rounded-2xl hover:border-indigo-300 hover:shadow-lg transition-all cursor-pointer flex items-center justify-between group">
+                           <div key={`${quiz.id}-${idx}`} onClick={() => onLoadHistory(quiz)} className="bg-white border border-slate-200 p-4 rounded-2xl hover:border-indigo-300 hover:shadow-lg transition-all cursor-pointer flex items-center justify-between group">
                               <div className="flex items-center gap-4 overflow-hidden">
                                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-black text-lg border ${scoreColor}`}>
                                     {quiz.lastScore ?? "-"}
@@ -398,8 +398,8 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) =
                   </div>
                ) : (
                   <div className="grid grid-cols-1 gap-4">
-                     {graveyardItems.map((q) => (
-                        <div key={q.id} className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm hover:shadow-md transition-all flex flex-col md:flex-row gap-4">
+                     {graveyardItems.map((q, i) => (
+                        <div key={`${q.id}-${i}`} className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm hover:shadow-md transition-all flex flex-col md:flex-row gap-4">
                            <div className="flex-1">
                               <span className="text-[10px] bg-rose-100 text-rose-600 px-2 py-1 rounded font-bold uppercase tracking-wider mb-2 inline-block">Salah pada {new Date(q.buriedAt || Date.now()).toLocaleDateString()}</span>
                               <p className="font-bold text-slate-800 mb-2">{q.text}</p>
@@ -411,7 +411,7 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) =
                               <button onClick={() => handleResurrect(q)} className="flex items-center justify-center px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-500/20">
                                  <RefreshCw size={14} className="mr-2" /> Coba Lagi
                               </button>
-                              <button onClick={() => handleBanish(q.id)} className="flex items-center justify-center px-4 py-2 bg-slate-100 text-slate-500 rounded-xl text-xs font-bold hover:bg-slate-200">
+                              <button onClick={() => handleBanish(q.text)} className="flex items-center justify-center px-4 py-2 bg-slate-100 text-slate-500 rounded-xl text-xs font-bold hover:bg-slate-200">
                                  <Trash2 size={14} className="mr-2" /> Hapus
                               </button>
                            </div>

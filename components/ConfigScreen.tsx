@@ -247,8 +247,8 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
                     {libraryItems.length === 0 ? (
                         <p className="text-center py-12 text-slate-400 text-sm font-medium">Library kosong. Upload materi di Workspace dulu.</p>
                     ) : (
-                        libraryItems.map(item => (
-                            <div key={item.id} onClick={() => toggleLibrarySelection(item.id)} className={`group flex items-center justify-between p-3 mb-2 rounded-2xl cursor-pointer transition-all border ${selectedLibraryIds.includes(String(item.id)) ? 'bg-white border-indigo-200 shadow-md translate-x-1' : 'bg-transparent border-transparent hover:bg-white/60 hover:shadow-sm'}`}>
+                        libraryItems.map((item, idx) => (
+                            <div key={`${item.id}-${idx}`} onClick={() => toggleLibrarySelection(item.id)} className={`group flex items-center justify-between p-3 mb-2 rounded-2xl cursor-pointer transition-all border ${selectedLibraryIds.includes(String(item.id)) ? 'bg-white border-indigo-200 shadow-md translate-x-1' : 'bg-transparent border-transparent hover:bg-white/60 hover:shadow-sm'}`}>
                                 <div className="flex items-center gap-3 overflow-hidden">
                                 <div className={`p-2.5 rounded-xl transition-colors ${selectedLibraryIds.includes(String(item.id)) ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-200/50 text-slate-400 group-hover:bg-white'}`}><FileText size={18} /></div>
                                 <div className="min-w-0">

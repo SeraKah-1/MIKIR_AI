@@ -71,7 +71,7 @@ export const VirtualRoom: React.FC<VirtualRoomProps> = ({ onStartMix }) => {
                const isSelected = selectedIds.includes(quiz.id);
                return (
                  <motion.div 
-                   key={quiz.id}
+                   key={`${quiz.id}-${idx}`}
                    initial={{ x: -20, opacity: 0 }}
                    animate={{ x: 0, opacity: 1 }}
                    transition={{ delay: idx * 0.05 }}
