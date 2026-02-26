@@ -30,7 +30,14 @@ export const GestureControl: React.FC<GestureControlProps> = ({
     }
   };
 
-  const { canvasRef, isLoaded, error, detectedGesture, dwellProgress, videoRef } = useHandGesture(handleTrigger, false);
+  const { canvasRef, isLoaded, error, detectedGesture, dwellProgress, stream } = useHandGesture(handleTrigger, false);
+  const videoRef = React.useRef<HTMLVideoElement>(null);
+
+  React.useEffect(() => {
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
 
   if (error) return null;
 

@@ -1,5 +1,6 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { useCamera } from '../contexts/CameraContext';
 
 // --- LOGIC ---
 // We use dynamic import for MediaPipe tasks-vision via esm.sh to avoid SyntaxError with 'export'
@@ -16,7 +17,7 @@ export const useHandGesture = (
   onTrigger: (gesture: string) => void,
   isPaused: boolean
 ) => {
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const { videoRef, isCameraReady, stream } = useCamera();
   const onTriggerRef = useRef(onTrigger);
   
   useEffect(() => {
@@ -60,7 +61,7 @@ export const useHandGesture = (
 
         if (!active) return;
 
-        landmarkerRef.current = await HandLandmarker.createFromOptions(vision, {
+        const landmarker = await HandLandmarker.createFromOptions(vision, {
           baseOptions: {
             modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
             delegate: "GPU"
@@ -74,10 +75,14 @@ export const useHandGesture = (
 
         clearTimeout(loadTimeout);
 
-        if (active) {
-            setState(prev => ({ ...prev, isLoaded: true }));
-            startCamera();
+        if (!active) {
+            landmarker.close();
+            return;
         }
+
+        landmarkerRef.current = landmarker;
+        setState(prev => ({ ...prev, isLoaded: true }));
+        // Camera is managed by context
         
       } catch (err: any) {
         console.error("MediaPipe Load Error:", err);
@@ -91,7 +96,6 @@ export const useHandGesture = (
     return () => {
       active = false;
       clearTimeout(loadTimeout);
-      stopCamera();
       if (landmarkerRef.current) {
           landmarkerRef.current.close();
           landmarkerRef.current = null;
@@ -100,55 +104,27 @@ export const useHandGesture = (
     };
   }, []);
 
-  const startCamera = async (retryCount = 0) => {
-      // Create a video element if it doesn't exist (since we don't render it in hook)
-      if (!videoRef.current) {
-          const video = document.createElement('video');
-          video.autoplay = true;
-          video.playsInline = true;
-          video.muted = true;
-          // @ts-ignore
-          videoRef.current = video;
-      }
-
-      try {
-          const stream = await navigator.mediaDevices.getUserMedia({
-              video: {
-                  width: { ideal: 640 },
-                  height: { ideal: 480 },
-                  facingMode: "user",
-                  frameRate: { ideal: 30 }
-              }
-          });
-
-          if (videoRef.current) {
-              videoRef.current.srcObject = stream;
-              await videoRef.current.play();
-              requestRef.current = requestAnimationFrame(predictWebcam);
-          }
-      } catch (err) {
-          console.error("Camera Error:", err);
-          if (retryCount < 3) {
-              setTimeout(() => startCamera(retryCount + 1), 1000);
-          } else {
-              setState(prev => ({ ...prev, error: "Gagal akses kamera." }));
-          }
-      }
-  };
-
-  const stopCamera = () => {
-      if (videoRef.current && videoRef.current.srcObject) {
-          const stream = videoRef.current.srcObject as MediaStream;
-          stream.getTracks().forEach(t => t.stop());
-          videoRef.current.srcObject = null;
-      }
-  };
+  // Start prediction loop when camera is ready
+  useEffect(() => {
+    if (isCameraReady && landmarkerRef.current && !state.error) {
+        requestRef.current = requestAnimationFrame(predictWebcam);
+    }
+    return () => {
+        cancelAnimationFrame(requestRef.current);
+    };
+  }, [isCameraReady, state.isLoaded, state.error]);
 
   // --- 3. DETECTION LOOP (THROTTLED) ---
   const predictWebcam = async () => {
     if (!landmarkerRef.current || !videoRef.current || !canvasRef.current) return;
 
     const video = videoRef.current;
+    
+    // Safety check for video readiness
+    if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
+        requestRef.current = requestAnimationFrame(predictWebcam);
+        return;
+    }
     
     if (video.currentTime !== lastVideoTimeRef.current) {
         const timeDiff = (video.currentTime - lastVideoTimeRef.current) * 1000;
@@ -384,5 +360,5 @@ export const useHandGesture = (
       ctx.shadowBlur = 0;
   };
 
-  return { canvasRef, isHandDetected, videoRef, ...state };
+  return { canvasRef, isHandDetected, stream, ...state };
 };

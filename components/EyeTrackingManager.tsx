@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useCamera } from '../contexts/CameraContext';
 
 interface EyeTrackingManagerProps {
   onOptionSelect: (index: number) => void;
@@ -13,11 +14,19 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
   onPrev,
   isAnswered
 }) => {
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const { videoRef: globalVideoRef, isCameraReady, stream } = useCamera();
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const localVideoRef = useRef<HTMLVideoElement>(null);
   const landmarkerRef = useRef<any>(null);
   const requestRef = useRef<number>(0);
   const lastVideoTimeRef = useRef<number>(-1);
+
+  // Sync stream to local video for visualization
+  useEffect(() => {
+    if (localVideoRef.current && stream) {
+      localVideoRef.current.srcObject = stream;
+    }
+  }, [stream]);
 
   const [status, setStatus] = useState<string>('Loading AI...');
   
@@ -51,9 +60,14 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
 
   useEffect(() => {
     let active = true;
+    let loadTimeout: NodeJS.Timeout;
     
     const initMediaPipe = async () => {
       try {
+        loadTimeout = setTimeout(() => {
+            if (active) setStatus('Connection slow...');
+        }, 15000);
+
         const { FilesetResolver, FaceLandmarker } = await import("https://esm.sh/@mediapipe/tasks-vision@0.10.17");
         const vision = await FilesetResolver.forVisionTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.17/wasm"
@@ -61,7 +75,7 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
 
         if (!active) return;
 
-        landmarkerRef.current = await FaceLandmarker.createFromOptions(vision, {
+        const landmarker = await FaceLandmarker.createFromOptions(vision, {
           baseOptions: {
             modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
             delegate: "GPU"
@@ -73,12 +87,19 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
           minTrackingConfidence: 0.5
         });
 
-        if (active) {
-          setStatus('Starting Camera...');
-          startCamera();
+        clearTimeout(loadTimeout);
+
+        if (!active) {
+            landmarker.close();
+            return;
         }
+
+        landmarkerRef.current = landmarker;
+        setStatus('AI Ready. Waiting for Camera...');
+        
       } catch (err) {
         console.error("FaceLandmarker Error:", err);
+        clearTimeout(loadTimeout);
         if (active) setStatus('Error loading AI');
       }
     };
@@ -87,7 +108,7 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
 
     return () => {
       active = false;
-      stopCamera();
+      clearTimeout(loadTimeout);
       if (landmarkerRef.current) {
         landmarkerRef.current.close();
         landmarkerRef.current = null;
@@ -99,68 +120,30 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
     };
   }, []);
 
-  const startCamera = async (retryCount = 0) => {
-    if (!videoRef.current) return;
-    
-    // Stop any existing stream first to be safe
-    stopCamera();
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: 320,
-          height: 240,
-          facingMode: "user",
-          frameRate: { ideal: 30 }
-        }
-      });
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        // Wait for data to be loaded
-        await new Promise((resolve) => {
-            if (videoRef.current) {
-                videoRef.current.onloadeddata = resolve;
-            }
-        });
-        videoRef.current.play().catch(e => console.log("Play error:", e));
-        requestRef.current = requestAnimationFrame(predictWebcam);
+  // Start prediction loop when camera is ready
+  useEffect(() => {
+    if (isCameraReady && landmarkerRef.current) {
         setStatus('Tracking Active');
-      } else {
-        // If ref is gone, stop stream immediately
-        stream.getTracks().forEach(t => t.stop());
-      }
-    } catch (err) {
-      console.error(`Camera Error (Attempt ${retryCount + 1}):`, err);
-      
-      if (retryCount < 3) {
-          setStatus(`Retrying Camera (${retryCount + 1}/3)...`);
-          setTimeout(() => startCamera(retryCount + 1), 1000);
-      } else {
-          setStatus('Camera Access Denied/Busy');
-      }
+        requestRef.current = requestAnimationFrame(predictWebcam);
     }
-  };
-
-  const stopCamera = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(track => {
-          track.stop();
-          track.enabled = false;
-      });
-      videoRef.current.srcObject = null;
-    }
-    if (requestRef.current) {
-        cancelAnimationFrame(requestRef.current);
-        requestRef.current = 0;
-    }
-  };
+    return () => {
+        if (requestRef.current) {
+            cancelAnimationFrame(requestRef.current);
+            requestRef.current = 0;
+        }
+    };
+  }, [isCameraReady]);
 
   const predictWebcam = () => {
-    if (!landmarkerRef.current || !videoRef.current) return;
+    if (!landmarkerRef.current || !globalVideoRef.current) return;
 
-    const video = videoRef.current;
+    const video = globalVideoRef.current;
+    
+    // Safety check
+    if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
+        requestRef.current = requestAnimationFrame(predictWebcam);
+        return;
+    }
 
     let targetX = cursorPosRef.current.x;
     let targetY = cursorPosRef.current.y;
@@ -491,16 +474,16 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
 
       {/* DEBUG CAMERA FEED */}
       <div className="fixed bottom-4 right-4 z-[9999] w-[200px] h-[150px] rounded-xl overflow-hidden border-2 border-emerald-500 shadow-lg bg-black">
-        <video 
-          ref={videoRef} 
-          className="w-full h-full object-cover transform scale-x-[-1]" 
-          playsInline 
-          autoPlay 
-          muted 
+        <video
+          ref={localVideoRef}
+          autoPlay
+          playsInline
+          muted
+          className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]"
         />
         <canvas 
           ref={canvasRef}
-          className="absolute top-0 left-0 w-full h-full pointer-events-none"
+          className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]"
           width={320}
           height={240}
         />

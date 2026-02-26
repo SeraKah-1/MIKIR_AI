@@ -1,14 +1,16 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { LogOut, Heart, Clock, AlertTriangle, SkipForward, X, ArrowLeft, ChevronLeft, Hand } from 'lucide-react';
+import { LogOut, Heart, Clock, AlertTriangle, SkipForward, X, ArrowLeft, ChevronLeft, Hand, Eye, Settings, Power } from 'lucide-react';
 import { Question, QuizResult, QuizMode } from '../types';
 import { useGameSound } from '../hooks/useGameSound';
 import { GestureControl } from './GestureControl';
-import { getGestureEnabled, getEyeTrackingEnabled, addToGraveyard } from '../services/storageService';
+import { addToGraveyard } from '../services/storageService';
 import { UniversalQuestionCard } from './UniversalQuestionCard'; 
 import { EyeTrackingManager } from './EyeTrackingManager';
 import confetti from 'canvas-confetti';
+import { useExperimentalSettings } from '../contexts/ExperimentalSettingsContext';
+import { useCamera } from '../contexts/CameraContext';
 
 interface QuizInterfaceProps {
   questions: Question[];
@@ -47,42 +49,20 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
   
   const [kaomojiState, setKaomojiState] = useState(KAO.IDLE);
   const [flashType, setFlashType] = useState<'none' | 'success' | 'error'>('none');
-  const [isGestureEnabled, setIsGestureEnabled] = useState(false);
-  const [isEyeTrackingEnabled, setIsEyeTrackingEnabled] = useState(false);
   
   const { playCorrect, playIncorrect, playClick } = useGameSound();
 
-  useEffect(() => { 
-      // Ensure only one is enabled at startup if both were saved as true
-      const savedGesture = getGestureEnabled();
-      const savedEye = getEyeTrackingEnabled();
-      
-      if (savedGesture) {
-          setIsGestureEnabled(true);
-          setIsEyeTrackingEnabled(false);
-      } else if (savedEye) {
-          setIsEyeTrackingEnabled(true);
-          setIsGestureEnabled(false);
-      }
-  }, []);
+  // --- NEW CONTEXT HOOKS ---
+  const { isExperimentalEnabled, toggleExperimental } = useExperimentalSettings();
+  const { mode: cameraMode, setMode: setCameraMode } = useCamera();
+  const [showSettings, setShowSettings] = useState(false);
 
-  const toggleEyeTracking = () => {
-      if (!isEyeTrackingEnabled) {
-          setIsEyeTrackingEnabled(true);
-          setIsGestureEnabled(false); // Disable gesture if eye tracking is enabled
-      } else {
-          setIsEyeTrackingEnabled(false);
-      }
-  };
-
-  const toggleGesture = () => {
-      if (!isGestureEnabled) {
-          setIsGestureEnabled(true);
-          setIsEyeTrackingEnabled(false); // Disable eye tracking if gesture is enabled
-      } else {
-          setIsGestureEnabled(false);
-      }
-  };
+  // Sync camera mode with experimental settings
+  useEffect(() => {
+    if (!isExperimentalEnabled && cameraMode !== 'OFF') {
+      setCameraMode('OFF');
+    }
+  }, [isExperimentalEnabled, cameraMode, setCameraMode]);
 
   const currentQuestion = questions[currentIndex];
   // Calculate progress for worm bar (width in percentage)
@@ -262,24 +242,68 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
             {/* RIGHT: Stats & Tools */}
             <div className="flex flex-col items-end gap-2">
                 <div className="flex items-center gap-2">
-                    {/* EYE TRACKING TOGGLE BUTTON */}
-                    <button 
-                        onClick={toggleEyeTracking}
-                        className={`px-3 py-1.5 rounded-xl border shadow-sm transition-all active:scale-95 text-xs font-bold flex items-center gap-1.5 ${isEyeTrackingEnabled ? 'bg-emerald-500 text-white border-emerald-600 shadow-emerald-500/20' : 'bg-white text-slate-400 border-slate-200 hover:text-emerald-500 hover:border-emerald-200'}`}
-                        title="Eye Tracking (Beta)"
+                    {/* SETTINGS TOGGLE */}
+                    <button
+                        onClick={() => setShowSettings(!showSettings)}
+                        className={`p-2 rounded-xl border shadow-sm transition-all active:scale-95 ${showSettings ? 'bg-slate-800 text-white border-slate-900' : 'bg-white text-slate-400 border-slate-200 hover:text-slate-600'}`}
                     >
-                        <span>👁️</span> <span className="hidden sm:inline">Beta Input</span>
+                        <Settings size={16} strokeWidth={2.5} />
                     </button>
 
-                    {/* GESTURE TOGGLE BUTTON */}
-                    <button 
-                        onClick={toggleGesture}
-                        className={`p-2 rounded-xl border shadow-sm transition-all active:scale-95 ${isGestureEnabled ? 'bg-purple-500 text-white border-purple-600 shadow-purple-500/20' : 'bg-white text-slate-300 border-slate-200 hover:text-purple-500 hover:border-purple-200'}`}
-                        title="Gesture Control (Hand)"
-                    >
-                        <Hand size={16} strokeWidth={2.5} />
-                    </button>
+                    {/* EXPERIMENTAL CONTROLS (Only if enabled) */}
+                    {isExperimentalEnabled && (
+                        <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 shadow-sm">
+                            <button 
+                                onClick={() => setCameraMode(cameraMode === 'EYE' ? 'OFF' : 'EYE')}
+                                className={`p-2 rounded-lg transition-all flex items-center gap-2 ${cameraMode === 'EYE' ? 'bg-emerald-500 text-white shadow-sm' : 'text-slate-400 hover:bg-slate-50'}`}
+                                title="Eye Tracking (Nose Navigation)"
+                            >
+                                <Eye size={16} strokeWidth={2.5} />
+                                {cameraMode === 'EYE' && <span className="text-xs font-bold pr-1">Mata</span>}
+                            </button>
+                            <button 
+                                onClick={() => setCameraMode(cameraMode === 'HAND' ? 'OFF' : 'HAND')}
+                                className={`p-2 rounded-lg transition-all flex items-center gap-2 ${cameraMode === 'HAND' ? 'bg-purple-500 text-white shadow-sm' : 'text-slate-400 hover:bg-slate-50'}`}
+                                title="Hand Gesture Control"
+                            >
+                                <Hand size={16} strokeWidth={2.5} />
+                                {cameraMode === 'HAND' && <span className="text-xs font-bold pr-1">Tangan</span>}
+                            </button>
+                        </div>
+                    )}
                 </div>
+
+                {/* SETTINGS POPUP */}
+                <AnimatePresence>
+                    {showSettings && (
+                        <motion.div 
+                            initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                            className="absolute top-full right-0 mt-2 w-64 bg-white rounded-2xl shadow-xl border border-slate-100 p-4 z-50"
+                        >
+                            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Experimental Features</h3>
+                            
+                            <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-2">
+                                    <div className={`p-1.5 rounded-lg ${isExperimentalEnabled ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-100 text-slate-400'}`}>
+                                        <Power size={14} strokeWidth={3} />
+                                    </div>
+                                    <span className="text-sm font-bold text-slate-700">Camera Input</span>
+                                </div>
+                                <button 
+                                    onClick={toggleExperimental}
+                                    className={`w-10 h-6 rounded-full transition-colors relative ${isExperimentalEnabled ? 'bg-indigo-500' : 'bg-slate-200'}`}
+                                >
+                                    <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${isExperimentalEnabled ? 'left-5' : 'left-1'}`} />
+                                </button>
+                            </div>
+                            <p className="text-[10px] text-slate-400 leading-tight">
+                                Enable experimental camera-based inputs (Eye Tracking & Hand Gestures). May consume more battery.
+                            </p>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
 
                 {mode === QuizMode.SURVIVAL && (
                     <div className={`flex items-center font-black px-3 py-1.5 rounded-xl text-xs border ${lives === 1 ? 'bg-rose-500 text-white border-rose-600' : 'bg-white text-rose-500 border-rose-100 shadow-sm'}`}>
@@ -331,7 +355,7 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
             </AnimatePresence>
         </div>
 
-        {isGestureEnabled && (
+        {isExperimentalEnabled && cameraMode === 'HAND' && (
             <GestureControl 
                 onOptionSelect={(idx) => handleAnswer(idx, idx === currentQuestion.correctIndex)}
                 onNext={handleNext}
@@ -340,7 +364,7 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
             />
         )}
 
-        {isEyeTrackingEnabled && (
+        {isExperimentalEnabled && cameraMode === 'EYE' && (
             <EyeTrackingManager 
                 onOptionSelect={(idx) => handleAnswer(idx, idx === currentQuestion.correctIndex)}
                 onNext={handleNext}
