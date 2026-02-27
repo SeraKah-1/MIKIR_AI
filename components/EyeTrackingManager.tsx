@@ -29,6 +29,7 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
   }, [stream]);
 
   const [status, setStatus] = useState<string>('Loading AI...');
+  const [isModelLoaded, setIsModelLoaded] = useState(false);
   
   // Ghost Pointer Ref (Direct DOM Mutation)
   const pointerRef = useRef<HTMLDivElement>(null);
@@ -58,6 +59,13 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
   const hasNavTriggeredRef = useRef<boolean>(false);
   const NAV_DWELL_DURATION = 2000; // 2.0 seconds
 
+  // Smile to Reset State
+  const [isSmiling, setIsSmiling] = useState(false);
+  const isSmilingRef = useRef(false);
+  const smileStartTimeRef = useRef<number>(0);
+  const hasSmileTriggeredRef = useRef<boolean>(false);
+  const SMILE_DWELL_DURATION = 500; // 0.5 seconds of smiling to reset
+
   useEffect(() => {
     let active = true;
     let loadTimeout: NodeJS.Timeout;
@@ -84,7 +92,8 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
           numFaces: 3, 
           minFaceDetectionConfidence: 0.5,
           minFacePresenceConfidence: 0.5,
-          minTrackingConfidence: 0.5
+          minTrackingConfidence: 0.5,
+          outputFaceBlendshapes: true
         });
 
         clearTimeout(loadTimeout);
@@ -95,6 +104,7 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
         }
 
         landmarkerRef.current = landmarker;
+        setIsModelLoaded(true);
         setStatus('AI Ready. Waiting for Camera...');
         
       } catch (err) {
@@ -120,9 +130,19 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
     };
   }, []);
 
+  const onOptionSelectRef = useRef(onOptionSelect);
+  const onNextRef = useRef(onNext);
+  const onPrevRef = useRef(onPrev);
+
+  useEffect(() => {
+    onOptionSelectRef.current = onOptionSelect;
+    onNextRef.current = onNext;
+    onPrevRef.current = onPrev;
+  }, [onOptionSelect, onNext, onPrev]);
+
   // Start prediction loop when camera is ready
   useEffect(() => {
-    if (isCameraReady && landmarkerRef.current) {
+    if (isCameraReady && isModelLoaded && landmarkerRef.current) {
         setStatus('Tracking Active');
         requestRef.current = requestAnimationFrame(predictWebcam);
     }
@@ -132,7 +152,7 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
             requestRef.current = 0;
         }
     };
-  }, [isCameraReady]);
+  }, [isCameraReady, isModelLoaded]);
 
   const predictWebcam = () => {
     if (!landmarkerRef.current || !globalVideoRef.current) return;
@@ -169,27 +189,56 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
       }
 
       if (results.faceLandmarks && results.faceLandmarks.length > 0) {
+        // --- SMILE DETECTION (BLENDSHAPES) ---
+        if (results.faceBlendshapes && results.faceBlendshapes.length > 0) {
+            const blendshapes = results.faceBlendshapes[0].categories;
+            const smileLeft = blendshapes.find((b: any) => b.categoryName === 'mouthSmileLeft')?.score || 0;
+            const smileRight = blendshapes.find((b: any) => b.categoryName === 'mouthSmileRight')?.score || 0;
+            
+            // If both sides of the mouth are smiling significantly
+            if (smileLeft > 0.5 && smileRight > 0.5) {
+                if (!isSmilingRef.current) {
+                    isSmilingRef.current = true;
+                    setIsSmiling(true);
+                    smileStartTimeRef.current = performance.now();
+                    hasSmileTriggeredRef.current = false;
+                } else {
+                    const smileDuration = performance.now() - smileStartTimeRef.current;
+                    if (smileDuration > SMILE_DWELL_DURATION && !hasSmileTriggeredRef.current) {
+                        // Trigger Reset!
+                        cursorPosRef.current = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+                        lastNosePosRef.current = null; // Clear last nose pos so it doesn't jump back
+                        smoothedMoveRef.current = { x: 0, y: 0 }; // Clear momentum
+                        hasSmileTriggeredRef.current = true;
+                        if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate([50, 50, 50]);
+                    }
+                }
+            } else {
+                if (isSmilingRef.current) {
+                    isSmilingRef.current = false;
+                    setIsSmiling(false);
+                }
+                hasSmileTriggeredRef.current = false;
+            }
+        }
+
         // --- VIP BOX FILTER ---
         let vipFace = null;
         let maxBoxArea = 0;
 
         for (const landmarks of results.faceLandmarks) {
-          const nose = landmarks[1]; 
+          let minX = 1, minY = 1, maxX = 0, maxY = 0;
+          for (const p of landmarks) {
+            if (p.x < minX) minX = p.x;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.y > maxY) maxY = p.y;
+          }
+          const area = (maxX - minX) * (maxY - minY);
 
-          if (nose.x > 0.25 && nose.x < 0.75 && nose.y > 0.25 && nose.y < 0.75) {
-            let minX = 1, minY = 1, maxX = 0, maxY = 0;
-            for (const p of landmarks) {
-              if (p.x < minX) minX = p.x;
-              if (p.x > maxX) maxX = p.x;
-              if (p.y < minY) minY = p.y;
-              if (p.y > maxY) maxY = p.y;
-            }
-            const area = (maxX - minX) * (maxY - minY);
-
-            if (area > maxBoxArea) {
-              maxBoxArea = area;
-              vipFace = landmarks;
-            }
+          if (area > maxBoxArea) {
+            maxBoxArea = area;
+            vipFace = landmarks;
           }
         }
 
@@ -250,6 +299,16 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
     if (pointerRef.current) {
       pointerRef.current.style.transform = `translate3d(${targetX}px, ${targetY}px, 0) translate(-50%, -50%)`;
       pointerRef.current.style.opacity = showCursor ? '1' : '0';
+      
+      // Visual feedback for smiling
+      if (isSmilingRef.current) {
+          pointerRef.current.style.borderColor = '#10b981'; // Emerald-500
+          pointerRef.current.style.boxShadow = '0 0 15px rgba(16, 185, 129, 0.8)';
+          pointerRef.current.style.transform += ' scale(1.2)';
+      } else {
+          pointerRef.current.style.borderColor = 'rgba(255,255,255,0.8)';
+          pointerRef.current.style.boxShadow = 'none';
+      }
     }
 
     const px = targetX;
@@ -314,8 +373,8 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
 
         if (duration >= NAV_DWELL_DURATION && !hasNavTriggeredRef.current) {
           hasNavTriggeredRef.current = true;
-          if (currentlyHoveredNav === 'next') onNext();
-          if (currentlyHoveredNav === 'prev') onPrev();
+          if (currentlyHoveredNav === 'next') onNextRef.current();
+          if (currentlyHoveredNav === 'prev') onPrevRef.current();
           if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate([50, 50, 50]);
         }
       } else {
@@ -345,9 +404,11 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
         if (duration >= DWELL_DURATION && !hasTriggeredRef.current) {
           hasTriggeredRef.current = true;
           if (typeof currentlyHovered === 'number') {
-            onOptionSelect(currentlyHovered);
+            onOptionSelectRef.current(currentlyHovered);
           } else if (currentlyHovered === 'reset') {
             cursorPosRef.current = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+            lastNosePosRef.current = null;
+            smoothedMoveRef.current = { x: 0, y: 0 };
           }
           if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate([50, 50, 50]);
         }
@@ -376,6 +437,8 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
       if (e.code === 'Space') {
         e.preventDefault();
         cursorPosRef.current = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+        lastNosePosRef.current = null;
+        smoothedMoveRef.current = { x: 0, y: 0 };
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -412,18 +475,11 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
       </div>
 
       <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex gap-2">
-        <button 
-          data-nose-action="reset"
-          onClick={() => { cursorPosRef.current = { x: window.innerWidth / 2, y: window.innerHeight / 2 }; }}
-          className="bg-slate-800 text-white px-4 py-2 rounded-full shadow-lg text-xs font-bold transition-all relative overflow-hidden"
-          style={{
-            background: hoveredOption === 'reset' 
-              ? `linear-gradient(to right, rgba(16, 185, 129, 0.5) ${dwellProgress}%, #1e293b ${dwellProgress}%)` 
-              : '#1e293b'
-          }}
+        <div 
+          className="bg-slate-800 text-white px-4 py-2 rounded-full shadow-lg text-xs font-bold transition-all relative overflow-hidden flex items-center gap-2"
         >
-          Reset Center (Space)
-        </button>
+          {isSmiling ? <span className="text-emerald-400">😊 Mereset...</span> : <span>Senyum untuk Reset (Atau Spasi)</span>}
+        </div>
       </div>
       
       {/* GHOST POINTER (Chameleon Ring) */}
