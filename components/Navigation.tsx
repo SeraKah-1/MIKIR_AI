@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Home, FolderOpen, Settings, Gamepad2 } from 'lucide-react';
+import { Home, FolderOpen, Settings, Gamepad2, Users, Brain } from 'lucide-react';
 import { AppView } from '../types';
 
 interface NavigationProps {
@@ -11,14 +11,16 @@ interface NavigationProps {
 export const Navigation: React.FC<NavigationProps> = ({ currentView, onChangeView }) => {
   const tabs = [
     { id: AppView.GENERATOR, icon: Home, label: 'Generator' },
+    { id: AppView.NEURO_SYNC, icon: Brain, label: 'Sync' },
     { id: AppView.VIRTUAL_ROOM, icon: Gamepad2, label: 'Mixer' },
+    { id: AppView.MULTIPLAYER, icon: Users, label: 'Lobby' },
     { id: AppView.WORKSPACE, icon: FolderOpen, label: 'Workspace' },
     { id: AppView.SETTINGS, icon: Settings, label: 'Settings' },
   ];
 
   return (
     <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-50 w-full max-w-md px-4">
-      <div className="bg-white/80 backdrop-blur-2xl border border-white/50 rounded-2xl shadow-2xl shadow-indigo-900/10 p-1.5 flex justify-between items-center">
+      <div className="bg-theme-glass backdrop-blur-2xl border border-theme-border rounded-2xl shadow-2xl shadow-theme-primary/10 p-1.5 flex justify-between items-center">
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const isActive = currentView === tab.id;
@@ -30,14 +32,14 @@ export const Navigation: React.FC<NavigationProps> = ({ currentView, onChangeVie
               className={`
                 relative flex flex-col items-center justify-center w-full py-2 rounded-xl transition-all duration-300
                 ${isActive 
-                  ? 'text-indigo-600 bg-indigo-50/50' 
-                  : 'text-slate-400 hover:text-indigo-400 hover:bg-white/50'}
+                  ? 'text-theme-primary bg-theme-primary/10' 
+                  : 'text-theme-muted hover:text-theme-primary hover:bg-theme-glass'}
               `}
             >
               <div className={`relative ${isActive ? 'transform -translate-y-1' : ''} transition-transform duration-300`}>
                 <Icon size={22} strokeWidth={isActive ? 2.5 : 2} />
                 {isActive && (
-                  <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-1 h-1 bg-indigo-600 rounded-full" />
+                  <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-1 h-1 bg-theme-primary rounded-full" />
                 )}
               </div>
               <span className={`text-[10px] font-bold mt-1 ${isActive ? 'opacity-100' : 'opacity-0 h-0 overflow-hidden'} transition-all duration-300`}>

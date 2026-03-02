@@ -12,7 +12,14 @@ import { summarizeMaterial } from "./geminiService";
 import { notifySupabaseError } from "./kaomojiNotificationService";
 import { get, set, update } from 'idb-keyval'; // IndexedDB Wrapper
 
-const HISTORY_KEY = 'glassquiz_history';
+// Helper for Unique IDs
+export const generateId = () => {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+    return Date.now().toString(36) + Math.random().toString(36).substr(2);
+};
+
+const HISTORY_KEY = 'glassquiz_history'; // Legacy key for migration
+const HISTORY_IDB_KEY = 'glassquiz_history_store'; // Key for IndexedDB
 const LIBRARY_IDB_KEY = 'glassquiz_library_store'; // Key for IndexedDB
 const GRAVEYARD_KEY = 'glassquiz_graveyard'; 
 const GEMINI_KEY_STORAGE = 'glassquiz_api_key';
@@ -81,7 +88,7 @@ export const saveApiKey = (provider: AiProvider, key: string) => {
 };
 
 export const saveApiKeysPool = (provider: AiProvider, keys: string[]) => {
-  const cleanKeys = keys.map(k => k.trim()).filter(k => k.length > 5);
+  const cleanKeys = (Array.isArray(keys) ? keys : []).map(k => (k || '').trim()).filter(k => k.length > 5);
   if (provider === 'gemini') localStorage.setItem(GEMINI_KEYS_POOL, JSON.stringify(cleanKeys));
   else localStorage.setItem(GROQ_KEYS_POOL, JSON.stringify(cleanKeys));
 };
@@ -144,6 +151,21 @@ export const removeApiKey = (provider: AiProvider) => {
   }
 };
 
+const KEYCARD_ID_STORAGE = 'glassquiz_keycard_id';
+
+export const getKeycardId = (): string => {
+    let id = localStorage.getItem(KEYCARD_ID_STORAGE);
+    if (!id) {
+        id = generateId();
+        localStorage.setItem(KEYCARD_ID_STORAGE, id);
+    }
+    return id;
+};
+
+export const setKeycardId = (id: string) => {
+    localStorage.setItem(KEYCARD_ID_STORAGE, id);
+};
+
 // --- STORAGE CONFIGURATION ---
 export const saveStorageConfig = (provider: StorageProvider, config?: { url: string, key: string }) => {
   localStorage.setItem(STORAGE_PREF_KEY, provider);
@@ -156,7 +178,17 @@ export const getStorageProvider = (): StorageProvider => {
 
 export const getSupabaseConfig = () => {
   const raw = localStorage.getItem(SUPABASE_CONFIG_KEY);
-  return raw ? JSON.parse(raw) : null;
+  if (raw) return JSON.parse(raw);
+  
+  // Fallback to environment variables
+  const envUrl = (typeof process !== 'undefined' && process.env ? process.env.SUPABASE_URL : null) || (import.meta.env ? import.meta.env.VITE_SUPABASE_URL : null);
+  const envKey = (typeof process !== 'undefined' && process.env ? process.env.SUPABASE_KEY : null) || (import.meta.env ? import.meta.env.VITE_SUPABASE_ANON_KEY : null);
+
+  if (envUrl && envKey) {
+      return { url: envUrl, key: envKey };
+  }
+  
+  return null;
 };
 
 // --- LIBRARY MANAGEMENT (Smart Ingest Implementation) ---
@@ -225,7 +257,7 @@ export const updateLibraryItem = async (id: string | number, updates: Partial<Li
 
 export const saveToLibrary = async (title: string, content: string, processedContent: string, type: 'pdf' | 'text' | 'note', tags: string[] = []) => {
   const newItem: LibraryItem = {
-    id: Date.now().toString(),
+    id: generateId(),
     title,
     content, // Original Raw Text
     processedContent, // AI Summarized Text (Lightweight)
@@ -243,9 +275,11 @@ export const saveToLibrary = async (title: string, content: string, processedCon
 
     // 2. Cloud (Supabase) - Sync if connected
     const sbConfig = getSupabaseConfig();
+    const keycardId = getKeycardId(); // Get Identity
     if (sbConfig) {
-       await MikirCloud.library.create(sbConfig, newItem).catch(e => {
+       await MikirCloud.library.create(sbConfig, newItem, keycardId).catch(e => {
            console.error("Cloud Library Save Failed:", e);
+           // Optional: Add to retry queue here
            notifySupabaseError();
        });
     }
@@ -277,7 +311,8 @@ export const getLibraryItems = async (): Promise<LibraryItem[]> => {
   const sbConfig = getSupabaseConfig();
   if (sbConfig) {
     try {
-      cloudItems = await MikirCloud.library.list(sbConfig);
+      const keycardId = getKeycardId();
+      cloudItems = await MikirCloud.library.list(sbConfig, keycardId);
     } catch (e) {
       console.warn("Cloud fetch failed", e);
     }
@@ -287,20 +322,23 @@ export const getLibraryItems = async (): Promise<LibraryItem[]> => {
   const uniqueMap = new Map();
   
   const addToMap = (item: LibraryItem, isCloud: boolean) => {
-      if (!uniqueMap.has(String(item.id))) {
-          uniqueMap.set(String(item.id), { ...item, isCloudSource: isCloud });
+      const key = String(item.id);
+      if (!uniqueMap.has(key)) {
+          uniqueMap.set(key, { ...item, isCloudSource: isCloud });
       } else {
-          // If collision, prefer the one with better content or default to Cloud
-          const existing = uniqueMap.get(String(item.id));
+          // If collision, we need to decide which one to keep.
+          // Strategy: Local wins for offline edits, but if Cloud has processed content and Local doesn't, take Cloud.
+          const existing = uniqueMap.get(key);
+          
           if (!existing.processedContent && item.processedContent) {
-              uniqueMap.set(String(item.id), { ...item, isCloudSource: isCloud });
+              uniqueMap.set(key, { ...item, isCloudSource: isCloud });
           }
       }
   };
 
-  // Cloud items first (authoritative), then Local
-  cloudItems.forEach(i => addToMap(i, true));
+  // Local items first (so they take precedence in map), then Cloud fills in gaps
   localItems.forEach(i => addToMap(i, false));
+  cloudItems.forEach(i => addToMap(i, true));
 
   return Array.from(uniqueMap.values()).sort((a, b) => 
       new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
@@ -332,7 +370,7 @@ export const saveGeneratedQuiz = async (file: File | null, config: ModelConfig, 
   const styleTags = Array.isArray(config.examStyle) ? config.examStyle : [config.examStyle];
 
   const newEntry = {
-    id: Date.now(), 
+    id: Date.now() + Math.floor(Math.random() * 10000), // Safer ID
     fileName: fileName,
     file_name: fileName, 
     modelId: config.modelId,
@@ -343,19 +381,25 @@ export const saveGeneratedQuiz = async (file: File | null, config: ModelConfig, 
     topicSummary: topicSummary,
     questions: questions,
     lastScore: null,
-    tags: [config.mode, ...styleTags]
+    tags: [config.mode, ...styleTags],
+    folder: config.folder,
+    visibility: config.visibility || 'private',
+    accessCode: config.accessCode
   };
 
   try {
-    const rawHistory = localStorage.getItem(HISTORY_KEY);
-    const history = rawHistory ? JSON.parse(rawHistory) : [];
-    history.unshift(newEntry);
-    if (history.length > 50) history.pop(); 
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+    // 1. Save to IndexedDB (Primary)
+    await update(HISTORY_IDB_KEY, (val) => {
+        const history = val || [];
+        const updated = [newEntry, ...history];
+        return updated.slice(0, 50); // Keep only 50 most recent
+    });
 
+    // 2. Cloud (Supabase) - Sync if connected
     const sbConfig = getSupabaseConfig();
+    const keycardId = getKeycardId();
     if (sbConfig) {
-      MikirCloud.quiz.create(sbConfig, newEntry).catch(e => {
+      MikirCloud.quiz.create(sbConfig, newEntry, keycardId).catch(e => {
           console.error("Cloud Quiz Save Failed:", e);
           notifySupabaseError();
       });
@@ -367,65 +411,75 @@ export const saveGeneratedQuiz = async (file: File | null, config: ModelConfig, 
 
 export const getSavedQuizzes = async (): Promise<any[]> => {
   try {
+    const history = await get(HISTORY_IDB_KEY);
+    if (history) return history;
+    
+    // Migration from LocalStorage
     const rawHistory = localStorage.getItem(HISTORY_KEY);
-    return rawHistory ? JSON.parse(rawHistory) : [];
+    if (rawHistory) {
+        const data = JSON.parse(rawHistory);
+        await set(HISTORY_IDB_KEY, data);
+        localStorage.removeItem(HISTORY_KEY);
+        return data;
+    }
+    return [];
   } catch (e) { return []; }
 };
 
 export const deleteQuiz = async (id: number | string) => {
-  const rawHistory = localStorage.getItem(HISTORY_KEY);
-  if (rawHistory) {
-    const history = JSON.parse(rawHistory);
-    const newHistory = history.filter((item: any) => String(item.id) !== String(id));
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(newHistory));
-  }
+  await update(HISTORY_IDB_KEY, (val) => {
+      const history = val || [];
+      return history.filter((item: any) => String(item.id) !== String(id));
+  });
 };
 
 export const renameQuiz = async (id: number | string, newName: string) => {
-  const rawHistory = localStorage.getItem(HISTORY_KEY);
-  if (rawHistory) {
-    const history = JSON.parse(rawHistory);
-    const newHistory = history.map((item: any) => 
-      String(item.id) === String(id) ? { ...item, fileName: newName, file_name: newName } : item
-    );
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(newHistory));
-  }
+  await update(HISTORY_IDB_KEY, (val) => {
+      const history = val || [];
+      return history.map((item: any) => 
+        String(item.id) === String(id) ? { ...item, fileName: newName, file_name: newName } : item
+      );
+  });
 };
 
 export const updateLocalQuizQuestions = async (id: number | string, newQuestions: Question[]) => {
-  const rawHistory = localStorage.getItem(HISTORY_KEY);
-  if (rawHistory) {
-    const history = JSON.parse(rawHistory);
-    const newHistory = history.map((item: any) => 
-      String(item.id) === String(id) ? { ...item, questions: newQuestions, questionCount: newQuestions.length } : item
-    );
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(newHistory));
-  }
+  await update(HISTORY_IDB_KEY, (val) => {
+      const history = val || [];
+      return history.map((item: any) => 
+        String(item.id) === String(id) ? { ...item, questions: newQuestions, questionCount: newQuestions.length } : item
+      );
+  });
 };
 
 export const updateHistoryStats = async (id: number | string, score: number) => {
-  const rawHistory = localStorage.getItem(HISTORY_KEY);
-  if (rawHistory) {
-    const history = JSON.parse(rawHistory);
-    const newHistory = history.map((item: any) => 
-      String(item.id) === String(id) ? { ...item, lastScore: score, lastPlayed: new Date().toISOString() } : item
-    );
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(newHistory));
-  }
+  await update(HISTORY_IDB_KEY, (val) => {
+      const history = val || [];
+      return history.map((item: any) => 
+        String(item.id) === String(id) ? { ...item, lastScore: score, lastPlayed: new Date().toISOString() } : item
+      );
+  });
 };
 
 // --- CLOUD OPERATIONS ---
-export const uploadToCloud = async (quiz: any) => {
+export const uploadToCloud = async (quiz: any, visibility: 'public' | 'private' | 'unlisted' = 'private', accessCode?: string) => {
   const sbConfig = getSupabaseConfig();
   if (!sbConfig) throw new Error("Supabase belum dikonfigurasi.");
-  const payload = { ...quiz, fileName: quiz.fileName || quiz.file_name, topicSummary: quiz.topicSummary || quiz.topic_summary };
-  return await MikirCloud.quiz.create(sbConfig, payload);
+  const keycardId = getKeycardId();
+  const payload = { 
+    ...quiz, 
+    fileName: quiz.fileName || quiz.file_name, 
+    topicSummary: quiz.topicSummary || quiz.topic_summary,
+    visibility,
+    accessCode
+  };
+  return await MikirCloud.quiz.create(sbConfig, payload, keycardId);
 };
 
-export const fetchCloudQuizzes = async () => {
+export const fetchCloudQuizzes = async (visibility: 'public' | 'private' | 'unlisted' | 'mine' | 'all' = 'public') => {
   const sbConfig = getSupabaseConfig();
   if (!sbConfig) return [];
-  return await MikirCloud.quiz.list(sbConfig);
+  const keycardId = getKeycardId();
+  return await MikirCloud.quiz.list(sbConfig, visibility, keycardId);
 };
 
 export const deleteFromCloud = async (cloudId: number | string) => {
@@ -443,20 +497,39 @@ export const updateCloudQuizQuestions = async (cloudId: number | string, newQues
 export const fetchNotesFromSupabase = async (): Promise<CloudNote[]> => {
   const sbConfig = getSupabaseConfig();
   if (!sbConfig) return [];
-  return await MikirCloud.notes.list(sbConfig);
+  const keycardId = getKeycardId();
+  return await MikirCloud.notes.list(sbConfig, keycardId);
 };
 
 export const downloadFromCloud = async (cloudQuiz: any) => {
   try {
+    const history = await get(HISTORY_IDB_KEY) || [];
+
+    // Check for duplicates (by original Cloud ID or exact content match)
+    const isDuplicate = history.some((item: any) => 
+        (item.originalCloudId && String(item.originalCloudId) === String(cloudQuiz.id)) || 
+        (item.file_name === cloudQuiz.file_name && item.questionCount === (Array.isArray(cloudQuiz.questions) ? cloudQuiz.questions.length : 0))
+    );
+
+    if (isDuplicate) {
+        console.log("Quiz already downloaded.");
+        return true; 
+    }
+
     let safeQuestions = cloudQuiz.questions;
     if (typeof safeQuestions === 'string') {
         try { safeQuestions = JSON.parse(safeQuestions); } catch (e) { safeQuestions = []; }
     }
-    const localQuiz = { ...cloudQuiz, id: Date.now(), isCloud: false, questions: safeQuestions || [] };
-    const rawHistory = localStorage.getItem(HISTORY_KEY);
-    const history = rawHistory ? JSON.parse(rawHistory) : [];
-    history.unshift(localQuiz);
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+    
+    const localQuiz = { 
+        ...cloudQuiz, 
+        id: Date.now() + Math.floor(Math.random() * 10000), 
+        isCloud: false, 
+        originalCloudId: cloudQuiz.id,
+        questions: safeQuestions || [] 
+    };
+
+    await set(HISTORY_IDB_KEY, [localQuiz, ...history]);
     return true;
   } catch (error) {
     console.error("Download failed:", error);

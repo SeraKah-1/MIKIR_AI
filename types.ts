@@ -12,7 +12,9 @@ export enum AppView {
   GENERATOR = 'GENERATOR',
   WORKSPACE = 'WORKSPACE', 
   SETTINGS = 'SETTINGS',
-  VIRTUAL_ROOM = 'VIRTUAL_ROOM'
+  VIRTUAL_ROOM = 'VIRTUAL_ROOM',
+  MULTIPLAYER = 'MULTIPLAYER',
+  NEURO_SYNC = 'NEURO_SYNC'
 }
 
 export enum QuizMode {
@@ -44,20 +46,25 @@ export interface Question {
   correctAnswer?: string; // For FillBlank (String matching)
   proposedAnswer?: string; // NEW: For True/False (e.g. "Apakah ibukota Jabar adalah [Surabaya]?")
   explanation: string;
+  hint?: string; // NEW: Socratic hint
   keyPoint: string; 
   difficulty: 'Easy' | 'Medium' | 'Hard';
   isReview?: boolean;
   originalId?: number;
 }
 
-export interface SRSData {
-  id: string; 
-  question: Question;
-  interval: number; 
-  repetition: number; 
-  easeFactor: number; 
-  dueDate: number; 
-  lastReviewed: number; 
+export interface SRSItem {
+  id?: string;
+  keycard_id?: string;
+  item_id: string;
+  item_type: 'quiz_question' | 'note' | 'library';
+  content: any; // The actual question object or note content
+  easiness: number;
+  interval: number;
+  repetition: number;
+  next_review: string; // ISO string
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface QuizResult {
@@ -109,8 +116,11 @@ export interface CloudNote {
 export type AiProvider = 'gemini' | 'groq';
 export type StorageProvider = 'local' | 'supabase';
 
+export type QuizVisibility = 'public' | 'private' | 'unlisted';
+
 export interface KeycardData {
   version: string;
+  id?: string; // NEW: Keycard ID for sync
   metadata: {
     owner: string;
     created_at: number;
@@ -140,6 +150,9 @@ export interface ModelConfig {
   libraryContext?: string;
   enableRetention?: boolean;
   enableMixedTypes?: boolean; // New: Toggle for True/False & FillBlank
+  folder?: string;
+  visibility?: QuizVisibility;
+  accessCode?: string;
 }
 
 export interface ModelOption {
@@ -150,20 +163,12 @@ export interface ModelOption {
 }
 
 export const AVAILABLE_MODELS: ModelOption[] = [
-  // --- GEMINI 3 SERIES (Frontier Intelligence) ---
-  { id: "gemini-3-pro-preview", label: "Gemini 3 Pro (Most Intelligent)", provider: 'gemini', isVision: true },
-  { id: "gemini-3-flash-preview", label: "Gemini 3 Flash (Balanced Speed)", provider: 'gemini', isVision: true },
-
-  // --- GEMINI 2.5 SERIES (Stable & Thinking) ---
-  { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro (Advanced Thinking)", provider: 'gemini', isVision: true },
-  { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash (Fast & Intelligent)", provider: 'gemini', isVision: true },
+  // --- GEMINI FLASH (Free Tier Friendly & Fast) ---
+  { id: "gemini-3-flash-preview", label: "Gemini 3 Flash (Free Tier Friendly)", provider: 'gemini', isVision: true },
+  { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash (Stable & Fast)", provider: 'gemini', isVision: true },
   { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite (Ultra Fast)", provider: 'gemini', isVision: true },
 
-  // --- LEGACY / BACKUP ---
-  { id: "gemini-2.0-flash", label: "Gemini 2.0 Flash (Deprecated)", provider: 'gemini', isVision: true },
-  
-  // --- GROQ MODELS ---
-  { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B (Versatile)", provider: 'groq' },
-  { id: "llama-3.1-8b-instant", label: "Llama 3.1 8B (Instant)", provider: 'groq' },
-  { id: "mixtral-8x7b-32768", label: "Mixtral 8x7B", provider: 'groq' },
+  // --- GEMINI PRO (Paid Tier / High Intelligence) ---
+  { id: "gemini-3-pro-preview", label: "Gemini 3 Pro (Paid Key Required)", provider: 'gemini', isVision: true },
+  { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro (Advanced Reasoning)", provider: 'gemini', isVision: true },
 ];

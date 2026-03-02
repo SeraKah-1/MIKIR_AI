@@ -1,20 +1,23 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { History, Clock, Edit3, Edit2, MoreVertical, Search, RefreshCw, Cloud, HardDrive, Layout, TrendingUp, Zap, Skull, CloudUpload, Play, Trash2, Tag, AlertCircle, CheckCircle2, Download, Book, Folder, FileText, Upload, ChevronRight, Hash, Plus, Ghost } from 'lucide-react';
+import { History, Clock, Edit3, Edit2, MoreVertical, Search, RefreshCw, Cloud, HardDrive, Layout, TrendingUp, Zap, Skull, CloudUpload, Play, Trash2, Tag, AlertCircle, CheckCircle2, Download, Book, Folder, FileText, Upload, ChevronRight, Hash, Plus, Ghost, MessageSquare, Save, X, User, Globe } from 'lucide-react';
 import { 
   getSavedQuizzes, renameQuiz, deleteQuiz,
   fetchCloudQuizzes, getStorageProvider, uploadToCloud, deleteFromCloud,
   updateLocalQuizQuestions, updateCloudQuizQuestions, downloadFromCloud,
-  processAndSaveToLibrary, getLibraryItems, deleteLibraryItem, 
-  getGraveyard, removeFromGraveyard, reprocessLibraryItem 
+  processAndSaveToLibrary, getLibraryItems, deleteLibraryItem, updateLibraryItem,
+  getGraveyard, removeFromGraveyard, reprocessLibraryItem, getSupabaseConfig
 } from '../services/storageService';
-import { extractPdfText } from '../services/groqService'; 
+import { MikirCloud } from '../services/supabaseService';
+import { extractPdfText } from '../services/fileService'; 
 import { EditQuizModal } from './EditQuizModal';
+import { ChatScreen } from './ChatScreen';
 import { QuizMode, LibraryItem, Question } from '../types';
 
 interface HistoryScreenProps {
   onLoadHistory: (quiz: any) => void;
+  onImportQuiz: (file: File) => void;
 }
 
 // --- UTILS ---
@@ -35,7 +38,7 @@ const getScoreColor = (score: number | null) => {
 };
 
 // --- WORKSPACE COMPONENT (NOTION-LIKE) ---
-export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) => {
+export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory, onImportQuiz }) => {
   const [activeTab, setActiveTab] = useState<'library' | 'quizzes' | 'graveyard'>('library');
   const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
   const [quizHistory, setQuizHistory] = useState<any[]>([]);
@@ -45,14 +48,61 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) =
   const [processingStatus, setProcessingStatus] = useState(""); // Feedback state
   const [processingProgress, setProcessingProgress] = useState({ done: 0, total: 0 });
   
+  // Chat State
+  const [activeChatContext, setActiveChatContext] = useState<{ text: string, file: File | null } | null>(null);
+
+  // Edit Library Item State
+  const [editingLibraryId, setEditingLibraryId] = useState<string | number | null>(null);
+  const [editLibraryTitle, setEditLibraryTitle] = useState("");
+  const [editLibraryTags, setEditLibraryTags] = useState("");
+
   // Quiz Specific States
   const [viewMode, setViewMode] = useState<'local' | 'cloud'>('local');
+  const [cloudFilter, setCloudFilter] = useState<'public' | 'mine'>('public');
   const [searchQuery, setSearchQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState<'all' | 'survival' | 'low_score' | 'new'>('all');
+  const [currentUser, setCurrentUser] = useState<any>(null);
+
+  // Upload Modal State
+  const [uploadModal, setUploadModal] = useState<{ quiz: any, isOpen: boolean }>({ quiz: null, isOpen: false });
+  const [uploadVisibility, setUploadVisibility] = useState<'public' | 'private' | 'unlisted'>('private');
+  const [uploadAccessCode, setUploadAccessCode] = useState('');
 
   useEffect(() => {
+    checkUser();
     refreshAll();
   }, []);
+
+  const checkUser = async () => {
+     const config = getStorageProvider() === 'supabase' ? getSupabaseConfig() : null;
+     if (config) {
+        try {
+           const user = await MikirCloud.auth.getUser(config);
+           setCurrentUser(user);
+           if (user) setCloudFilter('mine'); // Default to mine if logged in
+        } catch (e) { console.error(e); }
+     }
+  };
+
+  const handleOpenUploadModal = (quiz: any) => {
+    setUploadModal({ quiz, isOpen: true });
+    setUploadVisibility('private');
+    setUploadAccessCode('');
+  };
+
+  const handleConfirmUpload = async () => {
+    if (!uploadModal.quiz) return;
+    setIsLoading(true);
+    try {
+      await uploadToCloud(uploadModal.quiz, uploadVisibility, uploadAccessCode);
+      alert("Berhasil diupload ke Cloud!");
+      setUploadModal({ quiz: null, isOpen: false });
+    } catch (err: any) {
+      alert("Gagal upload: " + err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const refreshAll = async () => {
     setIsLoading(true);
@@ -65,27 +115,47 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) =
     setLibraryItems(items);
   };
 
+  const refreshGraveyard = () => {
+     setGraveyardItems(getGraveyard());
+  };
+
+  const handleDownloadQuiz = async (quiz: any) => {
+    if (confirm("Download kuis ini ke penyimpanan lokal agar bisa dimainkan offline?")) {
+       try {
+          await downloadFromCloud(quiz);
+          alert("Berhasil didownload ke Local Storage!");
+       } catch (e) {
+          alert("Gagal download.");
+       }
+    }
+  };
+
   const refreshQuizzes = async () => {
     if (viewMode === 'local') {
       const data = await getSavedQuizzes();
       setQuizHistory(data);
     } else {
-      const data = await fetchCloudQuizzes();
+      // If filtering by 'mine' but not logged in, fallback to public
+      const visibility = (cloudFilter === 'mine' && !currentUser) ? 'public' : cloudFilter;
+      const data = await fetchCloudQuizzes(visibility);
       setQuizHistory(data);
     }
   };
 
-  const refreshGraveyard = () => {
-     setGraveyardItems(getGraveyard());
-  };
-
-  useEffect(() => { refreshQuizzes(); }, [viewMode]);
+  useEffect(() => { refreshQuizzes(); }, [viewMode, cloudFilter]);
 
   // --- LIBRARY ACTIONS ---
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || !e.target.files[0]) return;
     const files = Array.from(e.target.files) as File[];
     
+    // SAFETY: Limit total upload size to 20MB
+    const totalSize = files.reduce((acc, f) => acc + f.size, 0);
+    if (totalSize > 20 * 1024 * 1024) {
+       alert("Total ukuran file terlalu besar (>20MB). Harap upload bertahap.");
+       return;
+    }
+
     setIsProcessingFile(true);
     setProcessingProgress({ done: 0, total: files.length });
     
@@ -98,7 +168,7 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) =
          let type: 'pdf' | 'text' = 'text';
          
          if (file.name.endsWith('.pdf')) {
-            content = await extractPdfText(file);
+            content = await extractPdfText(file, (p) => setProcessingStatus(p));
             type = 'pdf';
          } else {
             content = await file.text();
@@ -153,6 +223,28 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) =
       await deleteLibraryItem(id);
       refreshLibrary();
     }
+  };
+
+  const handleEditLibraryItem = (item: LibraryItem) => {
+    setEditingLibraryId(item.id);
+    setEditLibraryTitle(item.title);
+    setEditLibraryTags(item.tags ? item.tags.join(', ') : '');
+  };
+
+  const handleSaveLibraryItem = async (id: string | number) => {
+    const tagsArray = editLibraryTags.split(',').map(t => t.trim()).filter(t => t);
+    await updateLibraryItem(id, { title: editLibraryTitle, tags: tagsArray });
+    setEditingLibraryId(null);
+    refreshLibrary();
+  };
+
+  const handleOpenChat = (item: LibraryItem) => {
+    // Create a dummy file object just for the name display in ChatScreen
+    const dummyFile = new File([""], item.title, { type: "text/plain" });
+    setActiveChatContext({
+      text: item.processedContent || item.content,
+      file: dummyFile
+    });
   };
 
   // --- QUIZ ACTIONS ---
@@ -291,30 +383,84 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) =
                ) : (
                   <div className="grid grid-cols-1 gap-3">
                      {libraryItems.map((item, idx) => (
-                        <div key={`${item.id}-${idx}`} className="group flex items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl hover:shadow-md hover:border-indigo-200 transition-all">
-                           <div className="flex items-center gap-4 overflow-hidden">
+                        <div key={`${item.id}-${idx}`} className="group flex flex-col md:flex-row items-start md:items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl hover:shadow-md hover:border-indigo-200 transition-all gap-4">
+                           <div className="flex items-center gap-4 overflow-hidden w-full">
                               <div className={`p-3 rounded-xl shrink-0 ${item.type === 'pdf' ? 'bg-rose-50 text-rose-500' : 'bg-emerald-50 text-emerald-500'}`}>
                                  <FileText size={20} />
                               </div>
-                              <div className="min-w-0">
-                                 <h3 className="font-bold text-slate-700 truncate">{item.title}</h3>
-                                 <p className="text-xs text-slate-400 flex items-center gap-2">
-                                    <span className="uppercase font-bold tracking-wider text-[9px]">{item.type}</span>
-                                    <span>•</span>
-                                    <span>{new Date(item.created_at).toLocaleDateString()}</span>
-                                    {item.processedContent && item.processedContent.includes("[SMART CACHE") ? (
-                                       <span className="bg-emerald-100 text-emerald-600 px-1.5 py-0.5 rounded text-[8px] font-bold flex items-center gap-1">
-                                          <Zap size={8} /> CACHED
-                                       </span>
-                                    ) : (
-                                       <span className="bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded text-[8px] font-bold">RAW</span>
-                                    )}
-                                 </p>
+                              <div className="min-w-0 flex-1">
+                                 {editingLibraryId === item.id ? (
+                                    <div className="space-y-2 w-full">
+                                       <input 
+                                          type="text" 
+                                          value={editLibraryTitle} 
+                                          onChange={e => setEditLibraryTitle(e.target.value)} 
+                                          className="w-full border border-slate-300 rounded-lg px-2 py-1 text-sm font-bold text-slate-700 focus:outline-none focus:border-indigo-500"
+                                          placeholder="Judul Materi"
+                                       />
+                                       <input 
+                                          type="text" 
+                                          value={editLibraryTags} 
+                                          onChange={e => setEditLibraryTags(e.target.value)} 
+                                          className="w-full border border-slate-300 rounded-lg px-2 py-1 text-xs text-slate-600 focus:outline-none focus:border-indigo-500"
+                                          placeholder="Tags (pisahkan dengan koma)"
+                                       />
+                                    </div>
+                                 ) : (
+                                    <>
+                                       <h3 className="font-bold text-slate-700 truncate">{item.title}</h3>
+                                       <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400 mt-1">
+                                          <span className="uppercase font-bold tracking-wider text-[9px]">{item.type}</span>
+                                          <span>•</span>
+                                          <span>{new Date(item.created_at).toLocaleDateString()}</span>
+                                          {item.processedContent && item.processedContent.includes("[SMART CACHE") ? (
+                                             <span className="bg-emerald-100 text-emerald-600 px-1.5 py-0.5 rounded text-[8px] font-bold flex items-center gap-1">
+                                                <Zap size={8} /> CACHED
+                                             </span>
+                                          ) : (
+                                             <span className="bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded text-[8px] font-bold">RAW</span>
+                                          )}
+                                          {item.tags && item.tags.length > 0 && (
+                                             <>
+                                                <span>•</span>
+                                                <div className="flex gap-1">
+                                                   {item.tags.map((tag, i) => (
+                                                      <span key={i} className="bg-indigo-50 text-indigo-500 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center">
+                                                         <Tag size={8} className="mr-0.5" /> {tag}
+                                                      </span>
+                                                   ))}
+                                                </div>
+                                             </>
+                                          )}
+                                       </div>
+                                    </>
+                                 )}
                               </div>
                            </div>
-                           <button onClick={() => handleDeleteLibraryItem(item.id)} className="p-2 text-slate-300 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100">
-                              <Trash2 size={18} />
-                           </button>
+                           <div className="flex gap-2 shrink-0 md:opacity-0 md:group-hover:opacity-100 transition-all w-full md:w-auto justify-end">
+                              {editingLibraryId === item.id ? (
+                                 <>
+                                    <button onClick={() => handleSaveLibraryItem(item.id)} className="p-2 text-emerald-500 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors" title="Simpan">
+                                       <Save size={18} />
+                                    </button>
+                                    <button onClick={() => setEditingLibraryId(null)} className="p-2 text-slate-400 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors" title="Batal">
+                                       <X size={18} />
+                                    </button>
+                                 </>
+                              ) : (
+                                 <>
+                                    <button onClick={() => handleOpenChat(item)} className="p-2 text-indigo-500 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors" title="Chat dengan Materi">
+                                       <MessageSquare size={18} />
+                                    </button>
+                                    <button onClick={() => handleEditLibraryItem(item)} className="p-2 text-amber-500 bg-amber-50 hover:bg-amber-100 rounded-lg transition-colors" title="Edit Materi">
+                                       <Edit2 size={18} />
+                                    </button>
+                                    <button onClick={() => handleDeleteLibraryItem(item.id)} className="p-2 text-slate-300 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-colors" title="Hapus">
+                                       <Trash2 size={18} />
+                                    </button>
+                                 </>
+                              )}
+                           </div>
                         </div>
                      ))}
                   </div>
@@ -332,9 +478,30 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) =
                   </div>
                   
                   {/* View Switcher */}
-                  <div className="bg-slate-100 p-1 rounded-xl flex shadow-inner shrink-0">
-                     <button onClick={() => setViewMode('local')} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${viewMode === 'local' ? 'bg-white shadow text-indigo-600' : 'text-slate-400'}`}>Local</button>
-                     <button onClick={() => setViewMode('cloud')} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${viewMode === 'cloud' ? 'bg-white shadow text-emerald-600' : 'text-slate-400'}`}>Cloud</button>
+                  <div className="flex gap-2">
+                     {viewMode === 'cloud' && currentUser && (
+                        <div className="bg-slate-100 p-1 rounded-xl flex shadow-inner shrink-0 mr-2">
+                           <button onClick={() => setCloudFilter('mine')} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${cloudFilter === 'mine' ? 'bg-white shadow text-purple-600' : 'text-slate-400'}`}><User size={12} /> My Cloud</button>
+                           <button onClick={() => setCloudFilter('public')} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${cloudFilter === 'public' ? 'bg-white shadow text-emerald-600' : 'text-slate-400'}`}><Globe size={12} /> Public</button>
+                        </div>
+                     )}
+                     <div className="bg-slate-100 p-1 rounded-xl flex shadow-inner shrink-0">
+                        <button onClick={() => setViewMode('local')} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${viewMode === 'local' ? 'bg-white shadow text-indigo-600' : 'text-slate-400'}`}>Local</button>
+                        <button onClick={() => setViewMode('cloud')} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${viewMode === 'cloud' ? 'bg-white shadow text-emerald-600' : 'text-slate-400'}`}>Cloud</button>
+                     </div>
+                     <button 
+                        onClick={() => document.getElementById('quiz-import')?.click()} 
+                        className="bg-pink-100 text-pink-600 px-3 py-1.5 rounded-xl text-xs font-bold shadow-sm hover:bg-pink-200 transition-all flex items-center gap-1"
+                     >
+                        <Upload size={14} /> Import
+                     </button>
+                     <input 
+                        type="file" 
+                        id="quiz-import" 
+                        className="hidden" 
+                        accept=".mikir,.json" 
+                        onChange={(e) => e.target.files && onImportQuiz(e.target.files[0])} 
+                     />
                   </div>
                </div>
 
@@ -366,12 +533,32 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) =
                                        <span>{quiz.questionCount} Soal</span>
                                        <span>•</span>
                                        <span>{new Date(quiz.date).toLocaleDateString()}</span>
+                                       {quiz.folder && (
+                                          <>
+                                             <span>•</span>
+                                             <span className="bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded text-[10px] font-bold flex items-center gap-1">
+                                                <Folder size={10} /> {quiz.folder}
+                                             </span>
+                                          </>
+                                       )}
                                     </div>
                                  </div>
                               </div>
-                              <button onClick={(e) => { e.stopPropagation(); handleDeleteQuiz(quiz.id); }} className="p-2 text-slate-300 hover:text-rose-500 hover:bg-rose-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all">
-                                 <Trash2 size={18} />
-                              </button>
+                              <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                                 {viewMode === 'local' && (
+                                    <button onClick={(e) => { e.stopPropagation(); handleOpenUploadModal(quiz); }} className="p-2 text-slate-300 hover:text-indigo-500 hover:bg-indigo-50 rounded-lg" title="Upload ke Cloud">
+                                       <CloudUpload size={18} />
+                                    </button>
+                                 )}
+                                 {viewMode === 'cloud' && (
+                                    <button onClick={(e) => { e.stopPropagation(); handleDownloadQuiz(quiz); }} className="p-2 text-slate-300 hover:text-emerald-500 hover:bg-emerald-50 rounded-lg" title="Download ke Local">
+                                       <Download size={18} />
+                                    </button>
+                                 )}
+                                 <button onClick={(e) => { e.stopPropagation(); handleDeleteQuiz(quiz.id); }} className="p-2 text-slate-300 hover:text-rose-500 hover:bg-rose-50 rounded-lg" title="Hapus">
+                                    <Trash2 size={18} />
+                                 </button>
+                              </div>
                            </div>
                         )
                      })
@@ -423,6 +610,65 @@ export const HistoryScreen: React.FC<HistoryScreenProps> = ({ onLoadHistory }) =
          )}
 
       </div>
+      
+      {/* Upload Modal */}
+      <AnimatePresence>
+        {uploadModal.isOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl">
+              <h3 className="text-xl font-bold text-slate-800 mb-4">Upload ke Cloud</h3>
+              <p className="text-sm text-slate-500 mb-6">Simpan kuis ini di server agar bisa dimainkan Multiplayer atau diakses dari device lain.</p>
+              
+              <div className="space-y-4 mb-6">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Visibilitas</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button onClick={() => setUploadVisibility('private')} className={`p-2 rounded-xl text-xs font-bold border ${uploadVisibility === 'private' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-500 border-slate-200'}`}>Private</button>
+                    <button onClick={() => setUploadVisibility('unlisted')} className={`p-2 rounded-xl text-xs font-bold border ${uploadVisibility === 'unlisted' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-500 border-slate-200'}`}>Unlisted</button>
+                    <button onClick={() => setUploadVisibility('public')} className={`p-2 rounded-xl text-xs font-bold border ${uploadVisibility === 'public' ? 'bg-emerald-500 text-white border-emerald-500' : 'bg-white text-slate-500 border-slate-200'}`}>Public</button>
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-2">
+                    {uploadVisibility === 'private' && "Hanya bisa diakses oleh Anda (jika login) atau via Direct Link."}
+                    {uploadVisibility === 'unlisted' && "Tidak muncul di pencarian, tapi bisa diakses dengan Kode PIN."}
+                    {uploadVisibility === 'public' && "Muncul di Library Publik. Semua orang bisa main."}
+                  </p>
+                </div>
+
+                {uploadVisibility === 'unlisted' && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Kode Akses (PIN)</label>
+                    <input 
+                      type="text" 
+                      value={uploadAccessCode} 
+                      onChange={(e) => setUploadAccessCode(e.target.value)} 
+                      placeholder="Contoh: 123456" 
+                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3">
+                <button onClick={() => setUploadModal({ quiz: null, isOpen: false })} className="flex-1 py-3 bg-slate-100 text-slate-500 rounded-xl font-bold hover:bg-slate-200">Batal</button>
+                <button onClick={handleConfirmUpload} disabled={isLoading} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 disabled:opacity-50 flex justify-center items-center">
+                  {isLoading ? <RefreshCw className="animate-spin mr-2" size={16} /> : <CloudUpload className="mr-2" size={16} />}
+                  Upload
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {activeChatContext && (
+          <ChatScreen 
+            contextText={activeChatContext.text} 
+            sourceFile={activeChatContext.file} 
+            onClose={() => setActiveChatContext(null)} 
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 };

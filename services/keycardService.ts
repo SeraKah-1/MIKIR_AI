@@ -7,7 +7,7 @@
  */
 import CryptoJS from 'crypto-js';
 import { KeycardData, AiProvider } from '../types';
-import { saveApiKey, saveStorageConfig, saveApiKeysPool } from './storageService';
+import { saveApiKey, saveStorageConfig, saveApiKeysPool, setKeycardId, generateId } from './storageService';
 
 const KEYCARD_SESSION_KEY = 'mikir_active_keycard';
 
@@ -18,7 +18,8 @@ export const generateKeycard = (
 ): string => {
   const payload: KeycardData = {
     ...data,
-    version: '1.2', // Bump version for multi-key support
+    version: '2.0', // Bump version for ID support
+    id: data.id || generateId(), // Ensure ID exists
   };
 
   const jsonString = JSON.stringify(payload);
@@ -65,7 +66,20 @@ export const unlockKeycard = (fileContent: string, pin: string): KeycardData => 
 };
 
 // --- SESSION MANAGEMENT ---
-export const applyKeycardToSession = (data: KeycardData) => {
+export const applyKeycardToSession = (data: KeycardData): { upgraded: boolean, newId?: string } => {
+  let upgraded = false;
+  let newId: string | undefined;
+
+  // 0. HANDLE IDENTITY (ID)
+  if (data.id) {
+      setKeycardId(data.id);
+  } else {
+      // LEGACY MIGRATION: Generate new ID for old cards
+      newId = generateId();
+      setKeycardId(newId);
+      upgraded = true;
+  }
+  
   // Inject keys if they exist in the card
   
   // 1. GEMINI
@@ -102,6 +116,9 @@ export const applyKeycardToSession = (data: KeycardData) => {
 
   // Save metadata to know we are logged in via card
   localStorage.setItem(KEYCARD_SESSION_KEY, JSON.stringify(data.metadata));
+  window.dispatchEvent(new Event('keycard_changed'));
+  
+  return { upgraded, newId };
 };
 
 export const getKeycardSession = () => {
@@ -128,4 +145,5 @@ export const logoutKeycard = () => {
   
   // 4. Force UI update by dispatching storage event (optional) or just reloading page
   console.log("Keycard Ejected. Storage Cleared.");
+  window.dispatchEvent(new Event('keycard_changed'));
 };

@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Check, X, ArrowRight, CornerDownLeft, Type, ToggleLeft } from 'lucide-react';
+import { Check, X, ArrowRight, CornerDownLeft, Type, ToggleLeft, Lightbulb } from 'lucide-react';
 import { Question } from '../types';
 import { useGameSound } from '../hooks/useGameSound';
 
@@ -10,7 +10,7 @@ interface UniversalCardProps {
   isAnswered: boolean;
   userAnswer: any;
   onAnswer: (answer: any, isCorrect: boolean) => void;
-  onNext: () => void;
+  onNext?: () => void;
 }
 
 // Improved Renderer with highlighting
@@ -34,6 +34,7 @@ export const UniversalQuestionCard: React.FC<UniversalCardProps> = ({
 }) => {
   const { playHover } = useGameSound();
   const [textInput, setTextInput] = useState("");
+  const [showHint, setShowHint] = useState(false);
 
   useEffect(() => {
     if (userAnswer && typeof userAnswer === 'string') {
@@ -42,6 +43,10 @@ export const UniversalQuestionCard: React.FC<UniversalCardProps> = ({
         setTextInput("");
     }
   }, [question.id, userAnswer]);
+
+  useEffect(() => {
+    setShowHint(false);
+  }, [question.id]);
 
   // --- RENDERER: MULTIPLE CHOICE (TACTILE) ---
   const renderMCQ = () => (
@@ -142,9 +147,9 @@ export const UniversalQuestionCard: React.FC<UniversalCardProps> = ({
   const renderFillBlank = () => {
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
-        if (!textInput.trim() || isAnswered) return;
+        if (!textInput || !textInput.trim() || isAnswered) return;
         const cleanInput = textInput.trim().toLowerCase();
-        const cleanAnswer = question.correctAnswer?.trim().toLowerCase() || "";
+        const cleanAnswer = (question.correctAnswer || "").trim().toLowerCase();
         const isCorrect = cleanInput === cleanAnswer || cleanAnswer.includes(cleanInput);
         onAnswer(textInput, isCorrect);
     };
@@ -220,6 +225,34 @@ export const UniversalQuestionCard: React.FC<UniversalCardProps> = ({
              renderMCQ()}
          </div>
 
+         {/* HINT BUTTON */}
+         {!isAnswered && question.hint && (
+            <div className="mb-8">
+               <button 
+                  onClick={() => setShowHint(!showHint)}
+                  className="text-sm font-bold text-indigo-500 hover:text-indigo-600 flex items-center gap-2 transition-colors"
+               >
+                  <span className="bg-indigo-100 p-1.5 rounded-lg"><Lightbulb size={14} /></span>
+                  {showHint ? "Sembunyikan Petunjuk" : "Tampilkan Petunjuk Socratic"}
+               </button>
+               
+               <AnimatePresence>
+                  {showHint && (
+                     <motion.div 
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        className="overflow-hidden mt-3"
+                     >
+                        <div className="bg-indigo-50/50 border border-indigo-100 rounded-2xl p-4 text-sm text-indigo-800 italic">
+                           💡 {question.hint}
+                        </div>
+                     </motion.div>
+                  )}
+               </AnimatePresence>
+            </div>
+         )}
+
          {/* EXPLANATION / NEXT BUTTON */}
          <AnimatePresence>
             {isAnswered && (
@@ -237,12 +270,14 @@ export const UniversalQuestionCard: React.FC<UniversalCardProps> = ({
                      </p>
                   </div>
                   
-                  <button 
-                    onClick={onNext} 
-                    className="btn-tactile w-full py-4 bg-slate-900 border-slate-700 text-white rounded-2xl font-bold text-lg shadow-xl hover:bg-slate-800 flex items-center justify-center gap-3"
-                  >
-                     Lanjut <ArrowRight size={20} />
-                  </button>
+                  {onNext && (
+                    <button 
+                        onClick={onNext} 
+                        className="btn-tactile w-full py-4 bg-slate-900 border-slate-700 text-white rounded-2xl font-bold text-lg shadow-xl hover:bg-slate-800 flex items-center justify-center gap-3"
+                    >
+                        Lanjut <ArrowRight size={20} />
+                    </button>
+                  )}
                </motion.div>
             )}
          </AnimatePresence>

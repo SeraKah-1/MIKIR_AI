@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Clock, Bell, Check, Calendar as CalendarIcon } from 'lucide-react';
+import { X, Clock, Bell, Check, Calendar as CalendarIcon, Download } from 'lucide-react';
 import { GlassButton } from './GlassButton';
-import { requestNotificationPermission, scheduleDailyReminder, getReminderTime } from '../services/notificationService';
+import { requestNotificationPermission, scheduleDailyReminder, getReminderTime, downloadICSFile } from '../services/notificationService';
 
 interface StudySchedulerProps {
   isOpen: boolean;
@@ -38,9 +38,13 @@ export const StudyScheduler: React.FC<StudySchedulerProps> = ({ isOpen, onClose,
   // Google Calendar Fallback
   const handleGoogleCalendar = () => {
     const title = encodeURIComponent(`Belajar Rutin: ${defaultTopic || "Materi Umum"}`);
-    const details = encodeURIComponent(`Waktunya mengasah otak di GlassQuiz AI!`);
+    const details = encodeURIComponent(`Waktunya mengasah otak di Mikir (-•_•)!`);
     const gCalUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&details=${details}&recur=RRULE:FREQ=DAILY`;
     window.open(gCalUrl, '_blank');
+  };
+
+  const handleDownloadICS = () => {
+    downloadICSFile(time, defaultTopic);
   };
 
   return (
@@ -95,12 +99,20 @@ export const StudyScheduler: React.FC<StudySchedulerProps> = ({ isOpen, onClose,
                   </div>
                 </GlassButton>
                 
-                <button 
-                  onClick={handleGoogleCalendar} 
-                  className="mt-4 w-full text-xs text-slate-400 hover:text-indigo-500 flex items-center justify-center py-2"
-                >
-                  <CalendarIcon size={12} className="mr-1" /> Atau gunakan Google Calendar
-                </button>
+                <div className="mt-4 flex flex-col space-y-2">
+                  <button 
+                    onClick={handleGoogleCalendar} 
+                    className="w-full text-xs text-slate-500 hover:text-indigo-600 flex items-center justify-center py-2 bg-slate-50 rounded-xl border border-slate-100 transition-colors"
+                  >
+                    <CalendarIcon size={14} className="mr-2" /> Tambah ke Google Calendar
+                  </button>
+                  <button 
+                    onClick={handleDownloadICS} 
+                    className="w-full text-xs text-slate-500 hover:text-indigo-600 flex items-center justify-center py-2 bg-slate-50 rounded-xl border border-slate-100 transition-colors"
+                  >
+                    <Download size={14} className="mr-2" /> Download File .ICS (Apple/Outlook)
+                  </button>
+                </div>
               </div>
             </div>
 

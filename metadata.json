@@ -1,5 +1,7 @@
 {
-  "name": "Copy of Mikir ( •_•)",
+  "name": "Mikir hihi",
   "description": "Tempat bikin soal dadakan. Upload materi, langsung jadi kuis. Gak pake ribet.",
-  "requestFramePermissions": ["camera"]
+  "requestFramePermissions": [
+    "camera"
+  ]
 }

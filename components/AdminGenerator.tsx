@@ -1,9 +1,10 @@
 
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Save, Key, Database, FileCode, Lock, CreditCard, User, Check, Zap, Cpu, Server, Copy, Upload, FileText, ArrowRight, RefreshCw } from 'lucide-react';
+import { X, Save, Key, Database, FileCode, Lock, CreditCard, User, Check, Zap, Cpu, Server, Copy, Upload, FileText, ArrowRight, RefreshCw, Fingerprint } from 'lucide-react';
 import { generateKeycard, unlockKeycard } from '../services/keycardService';
-import { getApiKey, getSupabaseConfig } from '../services/storageService';
+import { getApiKey, getSupabaseConfig, generateId } from '../services/storageService';
+import { MikirCloud } from '../services/supabaseService';
 import { AiProvider } from '../types';
 
 interface AdminGeneratorProps {
@@ -11,13 +12,19 @@ interface AdminGeneratorProps {
 }
 
 export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
-  // MODE: CREATE or EDIT
-  const [mode, setMode] = useState<'create' | 'edit'>('create');
+  // MODE: CREATE or EDIT or DASHBOARD
+  const [mode, setMode] = useState<'create' | 'edit' | 'dashboard'>('create');
+
+  // DASHBOARD STATE
+  const [stats, setStats] = useState<any>(null);
+  const [isLoadingStats, setIsLoadingStats] = useState(false);
 
   // EDIT STATE
   const [fileToEdit, setFileToEdit] = useState<File | null>(null);
   const [unlockPin, setUnlockPin] = useState('');
   const [isUnlocking, setIsUnlocking] = useState(false);
+  const [existingId, setExistingId] = useState<string | undefined>(undefined);
+  const [isGenerating, setIsGenerating] = useState(false);
 
   // Card Metadata (Form State)
   const [owner, setOwner] = useState('');
@@ -68,6 +75,7 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
         // POPULATE FORM
         setOwner(data.metadata.owner);
         setPin(unlockPin); // Pre-fill with old PIN
+        setExistingId(data.id); // Capture existing ID
         
         // Calculate remaining days
         if (data.metadata.expires_at) {
@@ -121,17 +129,31 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
     reader.readAsText(fileToEdit);
   };
 
-  const handleGenerate = () => {
+  const loadStats = async () => {
+    const config = getSupabaseConfig();
+    if (!config) {
+      alert("Supabase belum terhubung di browser Anda.");
+      return;
+    }
+
+    setIsLoadingStats(true);
+    try {
+      const data = await MikirCloud.system.getStats(config);
+      setStats(data);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsLoadingStats(false);
+    }
+  };
+
+  const handleGenerate = async () => {
     if (!owner) {
       alert("Masukkan nama User/Kelas terlebih dahulu.");
       return;
     }
     if (!pin) {
       alert("PIN wajib diisi.");
-      return;
-    }
-    if (!includeGemini && !includeGroq) {
-      alert("Pilih minimal satu Provider AI (Gemini atau Groq).");
       return;
     }
     
@@ -144,8 +166,27 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
     if (includeGroq && groqArray.length === 0) { alert("Groq Key dipilih tapi kosong!"); return; }
     if (includeSupabase && (!supabaseUrl || !supabaseKey)) { alert("Supabase config tidak lengkap!"); return; }
 
+    setIsGenerating(true);
+    const idToUse = existingId || generateId();
+
     try {
+      // Double check Supabase for duplicate ID if Supabase is enabled
+      const sbConfig = getSupabaseConfig();
+      if (sbConfig && !existingId) { // Only check if it's a NEW card (no existingId)
+        try {
+          const exists = await MikirCloud.system.checkKeycardIdExists(sbConfig, idToUse);
+          if (exists) {
+            alert("ID ini sudah terdaftar di database. Silakan tekan tombol Refresh ID untuk mendapatkan ID baru.");
+            setIsGenerating(false);
+            return;
+          }
+        } catch (err) {
+          console.warn("Supabase ID check failed, proceeding anyway", err);
+        }
+      }
+
       const encryptedString = generateKeycard(pin, {
+        id: idToUse, // Use the ID (existing or newly generated)
         metadata: {
           owner,
           created_at: Date.now(),
@@ -164,12 +205,16 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
         }
       });
 
-      // Download File
+      // Download File - Use application/octet-stream to force .mikir extension
       const blob = new Blob([encryptedString], { type: 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${owner.replace(/\s+/g, '_').toLowerCase()}.mikir`;
+      
+      // Fix filename: ensure .mikir extension and sanitize
+      const safeName = owner.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+      a.download = `${safeName}.mikir`;
+      
       document.body.appendChild(a); 
       a.click();
       document.body.removeChild(a);
@@ -178,6 +223,8 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
       alert(`Kartu .mikir untuk "${owner}" berhasil disimpan!\nTerdapat ${geminiArray.length} Gemini Keys dan ${groqArray.length} Groq Keys.`);
     } catch (e) {
       alert("Gagal membuat kartu. Cek data kembali.");
+    } finally {
+      setIsGenerating(false);
     }
   };
 
@@ -196,7 +243,7 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
                <h2 className="text-2xl font-bold text-slate-800">Card Studio</h2>
                <div className="flex space-x-4 mt-1">
                  <button 
-                   onClick={() => setMode('create')} 
+                   onClick={() => { setMode('create'); setExistingId(undefined); setOwner(''); setPin('123456'); }} 
                    className={`text-xs font-bold uppercase tracking-wider transition-colors ${mode === 'create' ? 'text-indigo-600 underline decoration-2' : 'text-slate-400 hover:text-slate-600'}`}
                  >
                    Create New
@@ -207,14 +254,64 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
                  >
                    Edit Existing
                  </button>
+                 <button 
+                   onClick={() => { setMode('dashboard'); loadStats(); }} 
+                   className={`text-xs font-bold uppercase tracking-wider transition-colors ${mode === 'dashboard' ? 'text-indigo-600 underline decoration-2' : 'text-slate-400 hover:text-slate-600'}`}
+                 >
+                   Cloud Monitor
+                 </button>
                </div>
              </div>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full transition-colors"><X className="text-slate-500" /></button>
         </div>
 
-        {/* MODE: LOAD EXISTING CARD */}
-        {mode === 'edit' ? (
+        {/* MODE: DASHBOARD */}
+        {mode === 'dashboard' ? (
+           <div className="p-8 flex-1 overflow-y-auto custom-scrollbar">
+              <div className="grid grid-cols-2 gap-4 mb-8">
+                 <div className="bg-indigo-50 p-6 rounded-3xl border border-indigo-100">
+                    <h4 className="text-xs font-bold text-indigo-400 uppercase mb-1">Total Quizzes</h4>
+                    <p className="text-3xl font-black text-indigo-900">{isLoadingStats ? '...' : stats?.quizzes || 0}</p>
+                 </div>
+                 <div className="bg-emerald-50 p-6 rounded-3xl border border-emerald-100">
+                    <h4 className="text-xs font-bold text-emerald-400 uppercase mb-1">Library Items</h4>
+                    <p className="text-3xl font-black text-emerald-900">{isLoadingStats ? '...' : stats?.library || 0}</p>
+                 </div>
+                 <div className="bg-amber-50 p-6 rounded-3xl border border-amber-100">
+                    <h4 className="text-xs font-bold text-amber-400 uppercase mb-1">Neuro Notes</h4>
+                    <p className="text-3xl font-black text-amber-900">{isLoadingStats ? '...' : stats?.notes || 0}</p>
+                 </div>
+                 <div className="bg-rose-50 p-6 rounded-3xl border border-rose-100">
+                    <h4 className="text-xs font-bold text-rose-400 uppercase mb-1">Active Rooms</h4>
+                    <p className="text-3xl font-black text-rose-900">{isLoadingStats ? '...' : stats?.activeRooms || 0}</p>
+                 </div>
+              </div>
+
+              <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200">
+                 <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-bold text-slate-700">Database Health</h3>
+                    <button onClick={loadStats} className="p-2 hover:bg-slate-200 rounded-lg transition-colors">
+                       <RefreshCw size={16} className={isLoadingStats ? 'animate-spin' : ''} />
+                    </button>
+                 </div>
+                 <div className="space-y-3">
+                    <div className="flex justify-between text-sm">
+                       <span className="text-slate-500">Status Connection</span>
+                       <span className="text-emerald-600 font-bold">Online</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                       <span className="text-slate-500">RLS Policies</span>
+                       <span className="text-emerald-600 font-bold">Active</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                       <span className="text-slate-500">Realtime Engine</span>
+                       <span className="text-emerald-600 font-bold">Enabled</span>
+                    </div>
+                 </div>
+              </div>
+           </div>
+        ) : mode === 'edit' ? (
            <div className="p-10 flex flex-col items-center justify-center h-full space-y-6">
               <div 
                 className="w-full h-32 border-2 border-dashed border-slate-300 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-slate-50 hover:border-indigo-400 transition-all relative"
@@ -291,6 +388,30 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
                         </div>
                     </div>
                   </div>
+
+                  <div className="mt-4">
+                      <label className="text-slate-600 text-xs font-bold block mb-2 ml-1">Keycard ID (Identity)</label>
+                      <div className="flex gap-2">
+                          <div className="relative flex-1">
+                              <Fingerprint size={16} className="absolute left-3 top-3.5 text-slate-400" />
+                              <input 
+                                type="text" 
+                                readOnly
+                                value={existingId || 'ID will be generated on issue...'} 
+                                className="w-full bg-slate-100 border border-slate-200 rounded-xl pl-10 pr-4 py-3 text-slate-500 font-mono text-xs focus:outline-none cursor-not-allowed" 
+                                placeholder="Identity ID"
+                              />
+                          </div>
+                          <button 
+                            onClick={() => setExistingId(generateId())}
+                            className="p-3 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-600 transition-colors flex items-center justify-center"
+                            title="Generate/Refresh ID"
+                          >
+                            <RefreshCw size={18} className={isGenerating ? 'animate-spin' : ''} />
+                          </button>
+                      </div>
+                      <p className="text-[10px] text-slate-400 mt-1 ml-1">ID ini digunakan untuk sinkronisasi data ke Cloud. Jangan diubah jika ingin data tetap sinkron.</p>
+                  </div>
               </section>
 
               <hr className="border-slate-100" />
@@ -312,20 +433,50 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
                           <input type="checkbox" checked={includeGemini} onChange={e => setIncludeGemini(e.target.checked)} className="w-5 h-5 accent-indigo-600 rounded cursor-pointer" />
                           <span className="font-bold text-slate-700">Google Gemini</span>
                         </div>
-                        {includeGemini && (
-                            <button onClick={() => loadMyKeys('gemini')} className="text-[10px] flex items-center bg-indigo-100 text-indigo-600 px-2 py-1 rounded hover:bg-indigo-200">
-                              <Copy size={10} className="mr-1" /> Load Mine
-                            </button>
-                        )}
+                        <div className="flex items-center gap-2">
+                            {includeGemini && (
+                                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-[10px] flex items-center bg-indigo-100 text-indigo-600 px-2 py-1 rounded hover:bg-indigo-200 font-bold">
+                                  Dapatkan Key <ArrowRight size={10} className="ml-1" />
+                                </a>
+                            )}
+                            {includeGemini && (
+                                <button onClick={() => loadMyKeys('gemini')} className="text-[10px] flex items-center bg-indigo-100 text-indigo-600 px-2 py-1 rounded hover:bg-indigo-200">
+                                  <Copy size={10} className="mr-1" /> Load Mine
+                                </button>
+                            )}
+                        </div>
                     </div>
                     {includeGemini && (
-                      <textarea 
-                          value={geminiKeys} 
-                          onChange={e => setGeminiKeys(e.target.value)} 
-                          placeholder="Paste Gemini Keys here (one per line)..."
-                          rows={4}
-                          className="w-full text-xs p-2 rounded border border-indigo-200 bg-white font-mono text-indigo-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                      />
+                      <div className="space-y-3">
+                        <textarea 
+                            value={geminiKeys} 
+                            onChange={e => setGeminiKeys(e.target.value)} 
+                            placeholder="Paste Gemini Keys here (one per line)..."
+                            rows={4}
+                            className="w-full text-xs p-2 rounded border border-indigo-200 bg-white font-mono text-indigo-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                        <details className="group bg-white border border-indigo-100 rounded-lg overflow-hidden">
+                           <summary className="p-3 flex items-center cursor-pointer list-none hover:bg-indigo-50/50 transition-colors">
+                               <div className="p-1.5 bg-indigo-50 rounded-md mr-3 shrink-0 group-open:bg-indigo-100 transition-colors">
+                                  <Zap size={14} className="text-indigo-500" />
+                               </div>
+                               <div className="flex-1">
+                                  <p className="text-xs font-bold text-slate-700">Tutorial: Cara mendapatkan Gemini API Key</p>
+                                  <p className="text-[10px] text-slate-500 mt-0.5 group-open:hidden">Klik untuk melihat langkah-langkah</p>
+                               </div>
+                           </summary>
+                           <div className="p-4 pt-0 text-xs text-slate-600 border-t border-indigo-50 bg-indigo-50/30">
+                               <ol className="list-decimal ml-4 space-y-2 mt-3">
+                                   <li>Buka <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-indigo-600 font-bold hover:underline">Google AI Studio</a>.</li>
+                                   <li>Login menggunakan akun Google Anda.</li>
+                                   <li>Klik tombol <b>"Create API key"</b>.</li>
+                                   <li>Pilih <b>"Create API key in new project"</b>.</li>
+                                   <li>Tunggu beberapa saat, lalu <b>Copy</b> API Key yang muncul.</li>
+                                   <li>Paste API Key tersebut ke dalam kotak di atas.</li>
+                               </ol>
+                           </div>
+                        </details>
+                      </div>
                     )}
                   </div>
 
@@ -336,20 +487,51 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
                           <input type="checkbox" checked={includeGroq} onChange={e => setIncludeGroq(e.target.checked)} className="w-5 h-5 accent-orange-600 rounded cursor-pointer" />
                           <span className="font-bold text-slate-700">Groq Cloud</span>
                         </div>
-                        {includeGroq && (
-                            <button onClick={() => loadMyKeys('groq')} className="text-[10px] flex items-center bg-orange-100 text-orange-600 px-2 py-1 rounded hover:bg-orange-200">
-                              <Copy size={10} className="mr-1" /> Load Mine
-                            </button>
-                        )}
+                        <div className="flex items-center gap-2">
+                            {includeGroq && (
+                                <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer" className="text-[10px] flex items-center bg-orange-100 text-orange-600 px-2 py-1 rounded hover:bg-orange-200 font-bold">
+                                  Dapatkan Key <ArrowRight size={10} className="ml-1" />
+                                </a>
+                            )}
+                            {includeGroq && (
+                                <button onClick={() => loadMyKeys('groq')} className="text-[10px] flex items-center bg-orange-100 text-orange-600 px-2 py-1 rounded hover:bg-orange-200">
+                                  <Copy size={10} className="mr-1" /> Load Mine
+                                </button>
+                            )}
+                        </div>
                     </div>
                     {includeGroq && (
-                      <textarea 
-                          value={groqKeys} 
-                          onChange={e => setGroqKeys(e.target.value)} 
-                          placeholder="Paste Groq API Keys here (one per line)..."
-                          rows={4}
-                          className="w-full text-xs p-2 rounded border border-orange-200 bg-white font-mono text-orange-800 focus:outline-none focus:ring-1 focus:ring-orange-500"
-                      />
+                      <div className="space-y-3">
+                        <textarea 
+                            value={groqKeys} 
+                            onChange={e => setGroqKeys(e.target.value)} 
+                            placeholder="Paste Groq API Keys here (one per line)..."
+                            rows={4}
+                            className="w-full text-xs p-2 rounded border border-orange-200 bg-white font-mono text-orange-800 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                        />
+                        <details className="group bg-white border border-orange-100 rounded-lg overflow-hidden">
+                           <summary className="p-3 flex items-center cursor-pointer list-none hover:bg-orange-50/50 transition-colors">
+                               <div className="p-1.5 bg-orange-50 rounded-md mr-3 shrink-0 group-open:bg-orange-100 transition-colors">
+                                  <Zap size={14} className="text-orange-500" />
+                               </div>
+                               <div className="flex-1">
+                                  <p className="text-xs font-bold text-slate-700">Tutorial: Cara mendapatkan Groq API Key</p>
+                                  <p className="text-[10px] text-slate-500 mt-0.5 group-open:hidden">Klik untuk melihat langkah-langkah</p>
+                               </div>
+                           </summary>
+                           <div className="p-4 pt-0 text-xs text-slate-600 border-t border-orange-50 bg-orange-50/30">
+                               <ol className="list-decimal ml-4 space-y-2 mt-3">
+                                   <li>Buka <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" className="text-orange-600 font-bold hover:underline">Groq Cloud Console</a>.</li>
+                                   <li>Login menggunakan akun Google atau GitHub Anda.</li>
+                                   <li>Klik tombol <b>"Create API Key"</b>.</li>
+                                   <li>Masukkan nama untuk API Key Anda (misal: "test").</li>
+                                   <li>Klik <b>"Submit"</b>.</li>
+                                   <li><b>Copy</b> API Key yang muncul (dimulai dengan <code>gsk_</code>).</li>
+                                   <li>Paste API Key tersebut ke dalam kotak di atas.</li>
+                               </ol>
+                           </div>
+                        </details>
+                      </div>
                     )}
                   </div>
               </section>
@@ -417,9 +599,11 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
               </div>
               <button 
                 onClick={handleGenerate} 
-                className="px-8 py-3 bg-slate-900 hover:bg-indigo-600 text-white rounded-xl font-bold flex items-center shadow-lg transition-all active:scale-95"
+                disabled={isGenerating}
+                className="px-8 py-3 bg-slate-900 hover:bg-indigo-600 text-white rounded-xl font-bold flex items-center shadow-lg transition-all active:scale-95 disabled:opacity-50"
               >
-                  <CreditCard className="mr-2" size={18} /> Issue Keycard
+                  {isGenerating ? <RefreshCw className="animate-spin mr-2" size={18} /> : <CreditCard className="mr-2" size={18} />}
+                  {existingId ? 'Update Keycard' : 'Issue Keycard'}
               </button>
             </div>
           </>

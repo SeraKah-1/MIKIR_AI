@@ -1,17 +1,12 @@
 
 import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CreditCard, Lock, Unlock, Upload, AlertCircle, ShieldCheck, ShieldAlert, ArrowRight } from 'lucide-react';
-import { unlockKeycard, applyKeycardToSession } from '../services/keycardService';
-import { AdminGenerator } from './AdminGenerator';
+import { CreditCard, Lock, Unlock, Upload, AlertCircle, ShieldCheck } from 'lucide-react';
+import { unlockKeycard, applyKeycardToSession, generateKeycard } from '../services/keycardService';
 
 interface LoginGateProps {
   onUnlock: () => void;
 }
-
-// DEFAULT PASSWORD FALLBACK
-// Setup Environment Variable: NEXT_PUBLIC_ADMIN_PASSWORD di Vercel untuk mengganti ini.
-const DEFAULT_ADMIN_PASS = "mikir123";
 
 export const LoginGate: React.FC<LoginGateProps> = ({ onUnlock }) => {
   const [dragActive, setDragActive] = useState(false);
@@ -20,12 +15,7 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onUnlock }) => {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showPinInput, setShowPinInput] = useState(false);
-  
-  // ADMIN STATES
-  const [logoClicks, setLogoClicks] = useState(0);
-  const [showAdminAuth, setShowAdminAuth] = useState(false);
-  const [adminPassInput, setAdminPassInput] = useState('');
-  const [showAdminTool, setShowAdminTool] = useState(false);
+  const [upgradedCard, setUpgradedCard] = useState<{ blob: Blob, name: string } | null>(null);
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -76,8 +66,23 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onUnlock }) => {
         const keycardData = unlockKeycard(content, pin);
         
         // Success
-        applyKeycardToSession(keycardData);
+        const result = applyKeycardToSession(keycardData);
         
+        if (result.upgraded && result.newId) {
+            // GENERATE NEW CARD
+            const newData = { ...keycardData, id: result.newId };
+            const newContent = generateKeycard(pin, newData); // Re-encrypt with same PIN
+            const blob = new Blob([newContent], { type: 'application/octet-stream' });
+            
+            // Fix filename extension
+            const baseName = file.name.replace(/\.(mikir|glasscard|txt)$/i, '');
+            const newName = `${baseName}_v2.mikir`;
+            
+            setUpgradedCard({ blob, name: newName });
+            setIsLoading(false);
+            return; // Stop here, wait for download
+        }
+
         // Add fake delay for effect
         setTimeout(() => {
           onUnlock();
@@ -91,36 +96,13 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onUnlock }) => {
   };
 
   const handleLogoClick = () => {
-    setLogoClicks(prev => {
-      const newCount = prev + 1;
-      if (newCount === 5) {
-        setShowAdminAuth(true); // Show Password Prompt instead of direct tool
-        return 0;
-      }
-      return newCount;
-    });
+    // Logo click easter egg or just nothing
   };
-
-  const verifyAdmin = () => {
-    const secret = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || DEFAULT_ADMIN_PASS;
-    if (adminPassInput === secret) {
-       setShowAdminAuth(false);
-       setShowAdminTool(true);
-       setAdminPassInput('');
-    } else {
-       setError("Password Admin Salah!");
-       setTimeout(() => setError(null), 2000);
-    }
-  };
-
-  if (showAdminTool) {
-    return <AdminGenerator onClose={() => setShowAdminTool(false)} />;
-  }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
+    <div className="flex items-center justify-center relative overflow-hidden w-full">
       {/* Background Ambience */}
-      <div className="absolute top-0 left-0 w-full h-full bg-slate-900 z-0">
+      <div className="absolute top-0 left-0 w-full h-full z-0">
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-indigo-500/20 rounded-full blur-[100px] animate-pulse" />
       </div>
 
@@ -143,41 +125,6 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onUnlock }) => {
             <h1 className="text-3xl font-bold text-white tracking-tight">Access Control</h1>
             <p className="text-indigo-200 text-sm mt-2">Insert Keycard (.mikir) to Initialize</p>
           </div>
-
-          {/* ADMIN AUTH OVERLAY */}
-          <AnimatePresence>
-            {showAdminAuth && (
-              <motion.div 
-                 initial={{ opacity: 0, backdropFilter: "blur(0px)" }}
-                 animate={{ opacity: 1, backdropFilter: "blur(10px)" }}
-                 exit={{ opacity: 0, backdropFilter: "blur(0px)" }}
-                 className="absolute inset-0 z-50 bg-slate-900/80 flex flex-col items-center justify-center p-6"
-              >
-                 <ShieldAlert className="text-rose-500 mb-4" size={48} />
-                 <h3 className="text-white font-bold text-lg mb-2">Restricted Area</h3>
-                 <p className="text-slate-400 text-xs text-center mb-6">Enter Admin Secret to access Card Generator.</p>
-                 
-                 <div className="w-full relative">
-                    <input 
-                      type="password" 
-                      value={adminPassInput}
-                      onChange={(e) => setAdminPassInput(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && verifyAdmin()}
-                      placeholder="Admin Password..."
-                      autoFocus
-                      className="w-full bg-black/40 border border-white/20 rounded-xl px-4 py-3 text-white text-center focus:outline-none focus:border-rose-500 transition-all"
-                    />
-                    <button 
-                      onClick={verifyAdmin}
-                      className="absolute right-2 top-2 p-1.5 bg-rose-600 rounded-lg text-white hover:bg-rose-500"
-                    >
-                      <ArrowRight size={16} />
-                    </button>
-                 </div>
-                 <button onClick={() => setShowAdminAuth(false)} className="mt-4 text-xs text-slate-500 hover:text-white underline">Cancel</button>
-              </motion.div>
-            )}
-          </AnimatePresence>
 
           {/* Upload Area */}
           <AnimatePresence mode='wait'>
@@ -251,6 +198,29 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onUnlock }) => {
                   )}
                 </button>
               </motion.div>
+            )}
+
+            {upgradedCard && (
+                <motion.div 
+                    initial={{ opacity: 0, scale: 0.9 }} 
+                    animate={{ opacity: 1, scale: 1 }} 
+                    className="absolute inset-0 bg-slate-900/95 z-20 flex flex-col items-center justify-center p-6 text-center"
+                >
+                    <div className="w-16 h-16 bg-emerald-500/20 rounded-full flex items-center justify-center mb-4 text-emerald-400">
+                        <ShieldCheck size={32} />
+                    </div>
+                    <h2 className="text-xl font-bold text-white mb-2">Keycard Upgraded!</h2>
+                    <p className="text-white/60 text-sm mb-6">Kartu lama Anda telah diperbarui ke versi 2.0 untuk mendukung Cloud Sync. Download kartu baru ini.</p>
+                    
+                    <a 
+                        href={URL.createObjectURL(upgradedCard.blob)} 
+                        download={upgradedCard.name}
+                        onClick={() => setTimeout(onUnlock, 1000)}
+                        className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-bold flex items-center justify-center shadow-lg shadow-emerald-500/20 transition-all"
+                    >
+                        <Upload size={18} className="mr-2" /> Download & Masuk
+                    </a>
+                </motion.div>
             )}
           </AnimatePresence>
 

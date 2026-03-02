@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ConfigScreen } from './components/ConfigScreen';
 import { LoadingScreen } from './components/LoadingScreen';
@@ -8,53 +8,61 @@ import { ResultScreen } from './components/ResultScreen';
 import { SettingsScreen } from './components/SettingsScreen';
 import { HistoryScreen } from './components/HistoryScreen';
 import { VirtualRoom } from './components/VirtualRoom';
+import { MultiplayerLobby } from './components/MultiplayerLobby';
+import { MultiplayerLeaderboard } from './components/MultiplayerLeaderboard';
 import { Navigation } from './components/Navigation';
-import { LoginGate } from './components/LoginGate'; 
-import { UniversalQuestionCard } from './components/UniversalQuestionCard'; 
+import { NeuroSyncDashboard } from './components/NeuroSyncDashboard';
 
 import { generateQuiz } from './services/geminiService';
 import { generateQuizGroq } from './services/groqService';
 import { transformToMixed, shuffleOptions } from './services/questionTransformer'; 
-import { saveGeneratedQuiz, getApiKey, updateHistoryStats, getSavedQuizzes, deleteQuiz, updateLocalQuizQuestions } from './services/storageService'; 
-import { createRetentionSequence } from './services/srsService'; 
+import { saveGeneratedQuiz, getApiKey, updateHistoryStats, getSavedQuizzes, deleteQuiz, updateLocalQuizQuestions, getSupabaseConfig } from './services/storageService'; 
+import { createRetentionSequence, NeuroSync } from './services/srsService'; 
 import { checkAndTriggerNotification } from './services/notificationService';
+import { MikirCloud, SupabaseConfig } from './services/supabaseService';
 import { notifyQuizReady } from './services/kaomojiNotificationService'; 
 import { initTheme } from './services/themeService'; 
-import { getKeycardSession } from './services/keycardService'; 
+import { getKeycardSession } from './services/keycardService';
 import { QuizState, Question, QuizResult, ModelConfig, QuizMode, AppView, ExamStyle } from './types';
-import { Info } from 'lucide-react';
+import { Info, CreditCard } from 'lucide-react';
+import { useAppStore } from './store/useAppStore';
+
+import { useAutoSave } from './hooks/useAutoSave';
 
 const App: React.FC = () => {
-  const [currentView, setCurrentView] = useState<AppView>(AppView.GENERATOR);
-  const [quizState, setQuizState] = useState<QuizState>(QuizState.CONFIG);
-  
-  // Questions State
-  const [questions, setQuestions] = useState<Question[]>([]); // The active playable list (includes repeats)
-  const [originalQuestions, setOriginalQuestions] = useState<Question[]>([]); // The base generated questions (unique)
-  
-  const [result, setResult] = useState<QuizResult | null>(null);
-  const [activeQuizId, setActiveQuizId] = useState<string | number | null>(null); 
-  const [lastConfig, setLastConfig] = useState<{files: File[] | null, config: ModelConfig} | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [loadingStatus, setLoadingStatus] = useState<string>("Inisialisasi...");
-  const [activeMode, setActiveMode] = useState<QuizMode>(QuizMode.STANDARD);
-  const [showAnalysis, setShowAnalysis] = useState(false);
-  const [isLocked, setIsLocked] = useState(true);
+  const {
+    currentView, setCurrentView,
+    quizState, setQuizState,
+    questions, setQuestions,
+    originalQuestions, setOriginalQuestions,
+    result, setResult,
+    activeQuizId, setActiveQuizId,
+    lastConfig, setLastConfig,
+    errorMsg, setErrorMsg,
+    loadingStatus, setLoadingStatus,
+    activeMode, setActiveMode,
+    showAnalysis, setShowAnalysis,
+    sessionMetadata, setSessionMetadata,
+    isMultiplayer, setIsMultiplayer,
+    multiplayerRoomId, setMultiplayerRoomId,
+    multiplayerPlayerId, setMultiplayerPlayerId,
+    isHost, setIsHost,
+    resetApp
+  } = useAppStore();
+
+  useAutoSave();
 
   useEffect(() => {
     initTheme();
     checkAndTriggerNotification();
-    checkAuth();
+    setSessionMetadata(getKeycardSession());
+
+    const handleKeycardChange = () => {
+      setSessionMetadata(getKeycardSession());
+    };
+    window.addEventListener('keycard_changed', handleKeycardChange);
+    return () => window.removeEventListener('keycard_changed', handleKeycardChange);
   }, []);
-
-  const checkAuth = () => {
-    const geminiKey = getApiKey('gemini');
-    const groqKey = getApiKey('groq');
-    if (geminiKey || groqKey) setIsLocked(false);
-    else setIsLocked(true);
-  };
-
-  const handleUnlock = () => setIsLocked(false);
 
   const startQuizGeneration = async (files: File[] | null, config: ModelConfig) => {
     const apiKey = getApiKey(config.provider);
@@ -65,6 +73,16 @@ const App: React.FC = () => {
     }
 
     const fileCount = files ? files.length : 0;
+    
+    // SAFETY CHECK: File Size
+    if (files) {
+       const totalSize = Array.from(files).reduce((acc, f) => acc + f.size, 0);
+       if (totalSize > 15 * 1024 * 1024) { // 15MB limit
+          alert("Total ukuran file terlalu besar (>15MB). Harap kurangi jumlah atau ukuran file agar tidak crash.");
+          return;
+       }
+    }
+
     const hasLibrary = config.libraryContext && config.libraryContext.length > 0;
     
     setLoadingStatus(hasLibrary ? "Membaca Library..." : (fileCount > 0 ? `Membaca ${fileCount} Dokumen...` : "Menganalisis Topik..."));
@@ -76,8 +94,9 @@ const App: React.FC = () => {
     setTimeout(async () => {
         try {
           let generatedQuestions: Question[] = [];
+          let finalContext = "";
 
-          // Universal Call (Handles Library + Files + Topic)
+          // --- GENERATION ROUTING ---
           if (config.provider === 'gemini') {
             const result = await generateQuiz(
               apiKey,
@@ -86,13 +105,14 @@ const App: React.FC = () => {
               config.modelId, 
               config.questionCount, 
               config.mode,
-              config.examStyle, // Now an array
+              config.examStyle,
               (status) => setLoadingStatus(status),
               [],
               config.customPrompt,
               config.libraryContext 
             );
             generatedQuestions = result.questions;
+            finalContext = result.contextText;
           } else {
              const result = await generateQuizGroq(
               apiKey,
@@ -101,22 +121,22 @@ const App: React.FC = () => {
               config.modelId,
               config.questionCount, 
               config.mode,
-              config.examStyle, // Now an array
+              config.examStyle,
               (status) => setLoadingStatus(status),
               [],
               config.customPrompt
             );
             generatedQuestions = result.questions;
+            finalContext = result.contextText;
           }
           
           if (!generatedQuestions || generatedQuestions.length === 0) {
             throw new Error("AI tidak menghasilkan soal. Coba topik lain.");
           }
 
-          // --- APPLY CLIENT-SIDE TRANSFORMATIONS (NEW) ---
+          // --- APPLY CLIENT-SIDE TRANSFORMATIONS (AST 0 LATENCY) ---
           if (config.enableMixedTypes) {
-             setLoadingStatus("Mengonversi Tipe Soal (Client-Side)...");
-             // Transform standard MCQ to T/F and FillBlank locally
+             setLoadingStatus("Mengonversi Tipe Soal (Heuristic)...");
              generatedQuestions = transformToMixed(generatedQuestions);
           }
 
@@ -149,10 +169,13 @@ const App: React.FC = () => {
             console.error("Non-fatal error saving quiz:", saveError);
           }
           
+          // CLEAR FILES FROM MEMORY after successful generation to prevent OOM
+          setLastConfig({ files: null, config }); 
+          
           setQuizState(QuizState.QUIZ_ACTIVE);
 
         } catch (error: any) {
-          console.error(error);
+          console.error("Generation Error:", error);
           setErrorMsg(error.message || "Terjadi kesalahan. Periksa API Key atau koneksi.");
           setQuizState(QuizState.ERROR);
         }
@@ -232,7 +255,43 @@ const App: React.FC = () => {
     }, 100);
   };
 
-  const handleImportQuiz = (file: File) => { /* ... same as before ... */ };
+  const handleImportQuiz = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const content = e.target?.result as string;
+        const importedData = JSON.parse(content);
+        
+        if (!importedData.questions || !Array.isArray(importedData.questions)) {
+          throw new Error("Format file kuis tidak valid.");
+        }
+
+        setLoadingStatus("Mengimpor Kuis...");
+        setQuizState(QuizState.PROCESSING);
+
+        // Save to local history
+        await saveGeneratedQuiz(null, {
+          provider: importedData.provider || 'gemini',
+          modelId: importedData.modelId || 'imported',
+          questionCount: importedData.questions.length,
+          mode: importedData.mode || QuizMode.STANDARD,
+          examStyle: importedData.examStyle || [ExamStyle.C2_CONCEPT],
+          topic: importedData.fileName || "Imported Quiz"
+        }, importedData.questions);
+
+        const latest = await getSavedQuizzes();
+        if (latest.length > 0) {
+           handleLoadHistory(latest[0]);
+        }
+        
+        alert("Kuis berhasil diimpor!");
+      } catch (err: any) {
+        alert("Gagal impor kuis: " + err.message);
+        setQuizState(QuizState.CONFIG);
+      }
+    };
+    reader.readAsText(file);
+  };
   
   const handleLoadHistory = (savedQuiz: any) => {
     const freshQuestions = savedQuiz.questions;
@@ -279,6 +338,24 @@ const App: React.FC = () => {
      setQuizState(QuizState.QUIZ_ACTIVE);
   };
   
+  const handleStartMultiplayer = (quizData: Question[], isHostUser: boolean, roomId: string, playerId?: string) => {
+    const shuffled = shuffleOptions(quizData);
+    setQuestions(shuffled);
+    setOriginalQuestions(shuffled);
+    setActiveMode(QuizMode.STANDARD);
+    setActiveQuizId(null);
+    setErrorMsg(null);
+    setResult(null);
+    setLastConfig(null);
+    
+    setIsMultiplayer(true);
+    setIsHost(isHostUser);
+    setMultiplayerRoomId(roomId);
+    if (playerId) setMultiplayerPlayerId(playerId);
+    
+    setQuizState(QuizState.QUIZ_ACTIVE);
+  };
+  
   // NEW: Remix Handler
   const handleRemix = (sourceQuestions: Question[]) => {
      setLoadingStatus("Remixing Soal...");
@@ -299,15 +376,73 @@ const App: React.FC = () => {
      }, 500);
   };
   
-  const handleQuizComplete = (finalResult: QuizResult) => {
+  const handleQuizComplete = async (finalResult: QuizResult) => {
     setResult(finalResult);
     setQuizState(QuizState.RESULTS);
+    
     if (activeQuizId) {
        const percentage = Math.round((finalResult.correctCount / finalResult.totalQuestions) * 100);
        updateHistoryStats(activeQuizId, percentage);
     }
+
+    // --- AUTO-SYNC WRONG ANSWERS TO SRS ---
+    if (sessionMetadata?.id) {
+      const config = getSupabaseConfig();
+      if (config) {
+        const wrongAnswers = finalResult.answers.filter(a => !a.isCorrect);
+        for (const ans of wrongAnswers) {
+          const question = questions.find(q => q.id === ans.questionId);
+          if (question) {
+            await NeuroSync.addItem(config, sessionMetadata.id, {
+              item_id: `q_${question.id}_${Date.now()}`, // Unique ID for SRS item
+              item_type: 'quiz_question',
+              content: question,
+              easiness: 2.5,
+              interval: 0,
+              repetition: 0,
+              next_review: new Date().toISOString()
+            });
+          }
+        }
+      }
+    }
   };
-  const handleExitQuiz = () => { setQuizState(QuizState.CONFIG); setCurrentView(AppView.GENERATOR); };
+
+  const handleAnswerSubmit = async (questionIndex: number, selectedOption: any, isCorrect: boolean, scoreDelta: number) => {
+    if (isMultiplayer && multiplayerRoomId && multiplayerPlayerId) {
+      try {
+        const config = getSupabaseConfig();
+        if (!config) throw new Error("Supabase config missing");
+        
+        await MikirCloud.multiplayer.submitAnswer(
+          config,
+          multiplayerRoomId,
+          multiplayerPlayerId,
+          questionIndex,
+          String(selectedOption),
+          isCorrect,
+          scoreDelta
+        );
+      } catch (err) {
+        console.error("Failed to submit answer to multiplayer room", err);
+      }
+    }
+  };
+
+  const handleExitQuiz = () => { 
+    if (isMultiplayer && multiplayerPlayerId) {
+      const config = getSupabaseConfig();
+      if (config) {
+        MikirCloud.multiplayer.leaveRoom(
+          config,
+          multiplayerPlayerId
+        ).catch(console.error);
+      }
+    }
+    setQuizState(QuizState.CONFIG); 
+    setCurrentView(AppView.GENERATOR); 
+    resetApp();
+  };
   
   const handleDeleteActiveQuiz = async () => { 
       if (activeQuizId) { 
@@ -338,11 +473,6 @@ const App: React.FC = () => {
   };
 
   const handleContinueQuiz = () => { if (questions.length > 0) setQuizState(QuizState.QUIZ_ACTIVE); };
-  const resetApp = () => {
-    setQuestions([]); setOriginalQuestions([]); setResult(null); setErrorMsg(null); setActiveQuizId(null); setLastConfig(null); setQuizState(QuizState.CONFIG);
-  };
-
-  if (isLocked) return <LoginGate onUnlock={handleUnlock} />;
 
   const renderContent = () => {
     if (quizState === QuizState.PROCESSING) return <LoadingScreen status={loadingStatus} />;
@@ -356,16 +486,24 @@ const App: React.FC = () => {
         
         return (
           <QuizInterface 
-            questions={questions} 
-            mode={activeMode} 
             onComplete={handleQuizComplete} 
             onExit={handleExitQuiz}
             onDelete={activeQuizId ? handleDeleteActiveQuiz : undefined}
+            onAnswerSubmit={handleAnswerSubmit}
           />
         );
     }
     
     if (quizState === QuizState.RESULTS && result) {
+        if (isMultiplayer && multiplayerRoomId && multiplayerPlayerId) {
+            return (
+                <MultiplayerLeaderboard 
+                    roomId={multiplayerRoomId}
+                    currentPlayerId={multiplayerPlayerId}
+                    onExit={handleExitQuiz}
+                />
+            );
+        }
         return (
             <ResultScreen 
               result={result} 
@@ -394,8 +532,10 @@ const App: React.FC = () => {
 
     switch (currentView) {
       case AppView.SETTINGS: return <SettingsScreen />;
-      case AppView.WORKSPACE: return <HistoryScreen onLoadHistory={handleLoadHistory} />; 
+      case AppView.WORKSPACE: return <HistoryScreen onLoadHistory={handleLoadHistory} onImportQuiz={handleImportQuiz} />; 
       case AppView.VIRTUAL_ROOM: return <VirtualRoom onStartMix={handleStartMixer} />;
+      case AppView.MULTIPLAYER: return <MultiplayerLobby onStartGame={handleStartMultiplayer} />;
+      case AppView.NEURO_SYNC: return <NeuroSyncDashboard keycardId={sessionMetadata?.id} onExit={() => setCurrentView(AppView.GENERATOR)} />;
       case AppView.GENERATOR: default: 
         return (
             <ConfigScreen 
@@ -409,12 +549,20 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-[100dvh] p-4 md:p-8 relative pb-24 transition-colors duration-500">
-      <button 
-        onClick={() => setShowAnalysis(!showAnalysis)}
-        className="fixed top-6 right-6 z-40 p-2 rounded-full bg-theme-glass border border-theme-border text-theme-muted hover:bg-theme-bg shadow-sm"
-      >
-        <Info size={24} />
-      </button>
+      <div className="fixed top-6 right-6 z-40 flex items-center space-x-3">
+        {sessionMetadata && (
+          <div className="px-3 py-1.5 bg-indigo-500/10 border border-indigo-500/20 rounded-full flex items-center shadow-sm backdrop-blur-md">
+            <CreditCard size={14} className="text-indigo-500 mr-2" />
+            <span className="text-xs font-bold text-indigo-600">{sessionMetadata.owner}</span>
+          </div>
+        )}
+        <button 
+          onClick={() => setShowAnalysis(!showAnalysis)}
+          className="p-2 rounded-full bg-theme-glass border border-theme-border text-theme-muted hover:bg-theme-bg shadow-sm"
+        >
+          <Info size={24} />
+        </button>
+      </div>
 
       <AnimatePresence>
         {showAnalysis && (

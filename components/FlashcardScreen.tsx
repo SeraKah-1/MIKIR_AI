@@ -2,12 +2,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence, useMotionValue, useTransform, PanInfo } from 'framer-motion';
 import { X, BrainCircuit, RotateCcw, Check, HelpCircle, Zap } from 'lucide-react';
-import { Question } from '../types';
+import { Question, SRSItem } from '../types';
 import { processCardReview, addQuestionToSRS } from '../services/srsService';
 import { useGameSound } from '../hooks/useGameSound';
 
 interface FlashcardScreenProps {
-  questions: Question[];
+  questions: (Question | SRSItem)[];
   onClose: () => void;
 }
 
@@ -49,7 +49,12 @@ export const FlashcardScreen: React.FC<FlashcardScreenProps> = ({ questions, onC
   // Init SRS
   useEffect(() => {
     document.body.style.overflow = 'hidden';
-    if (questions.length > 0) questions.forEach(q => addQuestionToSRS(q));
+    // If passing pure Questions, add them to SRS automatically
+    questions.forEach(q => {
+      if (!('item_type' in q)) {
+        addQuestionToSRS(undefined, undefined, q);
+      }
+    });
     return () => { document.body.style.overflow = 'unset'; };
   }, [questions]);
 
@@ -73,13 +78,16 @@ export const FlashcardScreen: React.FC<FlashcardScreenProps> = ({ questions, onC
     triggerHaptic();
 
     // 2. Process SRS
-    const currentQ = questions[index];
-    let quality = 3; 
-    if (rating === 'lupa') quality = 1; // Hard/Again
-    if (rating === 'ragu') quality = 3; // Hard/Pass
-    if (rating === 'paham') quality = 5; // Easy
+    const currentItem = questions[index];
+    let quality = 2; // Good (default)
+    if (rating === 'lupa') quality = 0; // Again
+    if (rating === 'ragu') quality = 1; // Hard
+    if (rating === 'paham') quality = 3; // Easy
     
-    processCardReview(currentQ, quality);
+    // Only process review if it's already an SRSItem
+    if ('item_type' in currentItem) {
+      processCardReview(undefined, currentItem as SRSItem, quality);
+    }
 
     // 3. Move Next
     setTimeout(() => {
@@ -138,7 +146,8 @@ export const FlashcardScreen: React.FC<FlashcardScreenProps> = ({ questions, onC
   }, [handleNextCard, onClose]);
 
   if (!questions || questions.length === 0) return null;
-  const currentQ = questions[index];
+  const currentQRaw = questions[index];
+  const currentQ = ('item_type' in currentQRaw) ? (currentQRaw.content as Question) : (currentQRaw as Question);
   const progress = ((index + 1) / questions.length) * 100;
 
   return (

@@ -53,6 +53,7 @@ export const useHandGesture = (
             if (active) setState(prev => ({ ...prev, error: "Koneksi lambat. Gagal memuat AI." }));
         }, 15000);
 
+        // @ts-ignore
         const { FilesetResolver, HandLandmarker } = await import("https://esm.sh/@mediapipe/tasks-vision@0.10.17");
 
         const vision = await FilesetResolver.forVisionTasks(

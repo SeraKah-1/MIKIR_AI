@@ -11,8 +11,8 @@ let cachedKey: string | null = null;
  * Menggunakan pola Singleton: jika URL/Key sama, pakai client yang sudah ada.
  */
 export const getSupabaseClient = (url: string, key: string): SupabaseClient => {
-  const cleanUrl = url.trim();
-  const cleanKey = key.trim();
+  const cleanUrl = (url || '').trim();
+  const cleanKey = (key || '').trim();
 
   if (!cleanUrl || !cleanKey) {
     throw new Error("Supabase URL dan Key tidak boleh kosong.");

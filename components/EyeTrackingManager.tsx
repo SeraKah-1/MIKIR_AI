@@ -76,6 +76,7 @@ export const EyeTrackingManager: React.FC<EyeTrackingManagerProps> = ({
             if (active) setStatus('Connection slow...');
         }, 15000);
 
+        // @ts-ignore
         const { FilesetResolver, FaceLandmarker } = await import("https://esm.sh/@mediapipe/tasks-vision@0.10.17");
         const vision = await FilesetResolver.forVisionTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.17/wasm"

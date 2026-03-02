@@ -6,6 +6,7 @@
  */
 
 import { Question, QuizMode, ExamStyle, ModelOption } from "../types";
+import { processFilesToContext } from "./fileService";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models";
@@ -46,6 +47,7 @@ export const fetchGroqModels = async (apiKey: string): Promise<ModelOption[]> =>
 };
 
 const extractAndParseJSON = (text: string): any[] => {
+  if (!text) return [];
   // 1. Clean Markdown
   let cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
   
@@ -95,48 +97,6 @@ const extractAndParseJSON = (text: string): any[] => {
   return [];
 };
 
-export const extractPdfText = async (file: File, onProgress?: (p: string) => void): Promise<string> => {
-  try {
-    // @ts-ignore
-    const pdfjs = window.pdfjsLib;
-    if (!pdfjs) throw new Error("PDF Lib Missing");
-    if (!pdfjs.GlobalWorkerOptions.workerSrc) pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
-
-    const arrayBuffer = await file.arrayBuffer();
-    const loadingTask = pdfjs.getDocument({ data: arrayBuffer });
-    const pdf = await loadingTask.promise;
-    
-    let fullText = "";
-    const maxPages = Math.min(pdf.numPages, 20); // Limit pages to avoid context overflow
-
-    for (let i = 1; i <= maxPages; i++) {
-      if (onProgress) onProgress(`${file.name}: Hal ${i}/${maxPages}`);
-      
-      // YIELD TO MAIN THREAD: Prevent UI Freeze on heavy parsing
-      await new Promise(resolve => setTimeout(resolve, 0));
-
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      const pageText = textContent.items.map((item: any) => item.str).join(" ");
-      fullText += `\n${pageText}\n`;
-    }
-    return fullText;
-  } catch (error: any) {
-    throw new Error(`Gagal baca ${file.name}: ` + error.message);
-  }
-};
-
-const processFileContent = async (file: File, onProgress?: (p: string) => void): Promise<string> => {
-  if (file.type === "application/pdf" || file.name.endsWith('.pdf')) {
-    return await extractPdfText(file, onProgress);
-  }
-  return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (e) => resolve(e.target?.result as string);
-      reader.readAsText(file);
-  });
-};
-
 const sanitizeQuestion = (q: any): Question | null => {
   const qText = q.text || q.question || q.soal; 
   if (!qText || typeof qText !== 'string' || qText.length < 5) return null; 
@@ -162,6 +122,7 @@ const sanitizeQuestion = (q: any): Question | null => {
     options: options,
     correctIndex: options.indexOf(correctContent),
     explanation: q.explanation || "Pembahasan tidak tersedia.",
+    hint: q.hint || "Coba ingat kembali konsep utamanya.",
     keyPoint: q.keyPoint || "Umum",
     difficulty: "Medium"
   };
@@ -188,12 +149,7 @@ export const generateQuizGroq = async (
   const fileArray = Array.isArray(files) ? files : (files ? [files] : []);
 
   if (fileArray.length > 0) {
-    onProgress("Membaca Knowledge Base...");
-    for (const file of fileArray) {
-        const fileText = await processFileContent(file, (p) => onProgress(p));
-        // Add explicit separators for Llama models
-        contextMaterial += `\n<document_content filename="${file.name}">\n${fileText}\n</document_content>\n`;
-    }
+    contextMaterial = await processFilesToContext(fileArray, onProgress);
   } else {
     contextMaterial = topic || "";
   }
@@ -245,6 +201,7 @@ export const generateQuizGroq = async (
         4. FOCUS: ${topic ? `Focus specifically on: ${topic}` : 'Cover the main concepts found in the text.'}
         5. ${bloomInstruction}
         6. USER NOTE: ${customPrompt || "None"}
+        7. SOCRATIC HINT: Provide a 'hint' that guides the user to the answer without giving it away directly.
         
         OUTPUT FORMAT (JSON OBJECT):
         {
@@ -254,6 +211,7 @@ export const generateQuizGroq = async (
               "options": ["Option A", "Option B", "Option C", "Option D"],
               "correctIndex": 0,
               "explanation": "Brief explanation why A is correct based on the text.",
+              "hint": "Socratic hint to help the user...",
               "keyPoint": "Topic Tag"
             }
           ]

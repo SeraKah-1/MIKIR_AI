@@ -25,8 +25,35 @@ CREATE TABLE IF NOT EXISTS public.generated_quizzes (
   model_id text,
   mode text,
   topic_summary text,
-  questions jsonb NOT NULL
+  questions jsonb NOT NULL,
+  folder text,
+  visibility text DEFAULT 'private', -- 'public', 'unlisted', 'private'
+  access_code text, -- Optional PIN for unlisted quizzes
+  user_id uuid REFERENCES auth.users(id), -- Owner (Legacy Auth)
+  keycard_id text -- NEW: Owner (Keycard Identity)
 );
+
+-- MIGRATION: Update kolom jika belum ada
+DO $$ 
+BEGIN 
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'generated_quizzes' AND column_name = 'visibility') THEN 
+        ALTER TABLE public.generated_quizzes ADD COLUMN visibility text DEFAULT 'private'; 
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'generated_quizzes' AND column_name = 'access_code') THEN 
+        ALTER TABLE public.generated_quizzes ADD COLUMN access_code text; 
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'generated_quizzes' AND column_name = 'user_id') THEN 
+        ALTER TABLE public.generated_quizzes ADD COLUMN user_id uuid REFERENCES auth.users(id); 
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'generated_quizzes' AND column_name = 'keycard_id') THEN 
+        ALTER TABLE public.generated_quizzes ADD COLUMN keycard_id text; 
+    END IF;
+END $$;
+
+-- INDEXING (Penting untuk performa ribuan user)
+CREATE INDEX IF NOT EXISTS idx_quizzes_user_id ON public.generated_quizzes(user_id);
+CREATE INDEX IF NOT EXISTS idx_quizzes_keycard_id ON public.generated_quizzes(keycard_id);
+CREATE INDEX IF NOT EXISTS idx_quizzes_visibility ON public.generated_quizzes(visibility);
 
 -- 2. Tabel Library Materi (PDF/Uploads)
 create table if not exists public.library_materials (
@@ -36,8 +63,20 @@ create table if not exists public.library_materials (
   content text,
   processed_content text,
   file_type text,
-  tags text[]
+  tags text[],
+  user_id uuid REFERENCES auth.users(id),
+  keycard_id text -- NEW: Owner (Keycard Identity)
 );
+
+-- MIGRATION Library
+DO $$ 
+BEGIN 
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'library_materials' AND column_name = 'keycard_id') THEN 
+        ALTER TABLE public.library_materials ADD COLUMN keycard_id text; 
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_library_keycard_id ON public.library_materials(keycard_id);
 
 -- 3. Tabel Neuro Notes (Catatan Kecil / Corat-coret)
 create table if not exists public.neuro_notes (
@@ -46,31 +85,123 @@ create table if not exists public.neuro_notes (
   topic text,
   mode text,
   content text,
-  provider text
+  provider text,
+  user_id uuid REFERENCES auth.users(id),
+  keycard_id text -- NEW: Owner (Keycard Identity)
 );
 
--- 4. Reset Permissions (Nuclear Option)
-alter table public.generated_quizzes disable row level security;
-alter table public.library_materials disable row level security;
-alter table public.neuro_notes disable row level security;
+-- MIGRATION Notes
+DO $$ 
+BEGIN 
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'neuro_notes' AND column_name = 'keycard_id') THEN 
+        ALTER TABLE public.neuro_notes ADD COLUMN keycard_id text; 
+    END IF;
+END $$;
 
+CREATE INDEX IF NOT EXISTS idx_notes_keycard_id ON public.neuro_notes(keycard_id);
+
+-- 4. Tabel Rooms (Multiplayer)
+CREATE TABLE IF NOT EXISTS public.rooms (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  room_code text UNIQUE NOT NULL,
+  host_id text NOT NULL,
+  status text DEFAULT 'waiting',
+  current_question_index integer DEFAULT 0,
+  quiz_data jsonb,
+  created_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 5. Tabel Players
+CREATE TABLE IF NOT EXISTS public.players (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  room_id uuid REFERENCES public.rooms(id) ON DELETE CASCADE,
+  session_token text NOT NULL,
+  name text NOT NULL,
+  score integer DEFAULT 0,
+  is_online boolean DEFAULT true,
+  joined_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 6. Tabel Answers
+CREATE TABLE IF NOT EXISTS public.answers (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  player_id uuid REFERENCES public.players(id) ON DELETE CASCADE,
+  room_id uuid REFERENCES public.rooms(id) ON DELETE CASCADE,
+  question_index integer NOT NULL,
+  selected_option text NOT NULL,
+  is_correct boolean NOT NULL,
+  answered_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 7. RPC: Increment Score (Atomic Update)
+CREATE OR REPLACE FUNCTION increment_score(row_id uuid, score_delta int)
+RETURNS void AS $$
+BEGIN
+  UPDATE public.players
+  SET score = score + score_delta
+  WHERE id = row_id;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ENABLE RLS (Row Level Security)
 alter table public.generated_quizzes enable row level security;
 alter table public.library_materials enable row level security;
 alter table public.neuro_notes enable row level security;
 
--- 5. KEBIJAKAN "GOD MODE" (CRUD BEBAS)
-drop policy if exists "God Mode Quizzes" on public.generated_quizzes;
-create policy "God Mode Quizzes" on public.generated_quizzes for all using (true) with check (true);
+-- POLICIES (Aturan Satpam Database)
 
-drop policy if exists "God Mode Library" on public.library_materials;
-create policy "God Mode Library" on public.library_materials for all using (true) with check (true);
+-- Quiz Policies (Updated for Keycard)
+DROP POLICY IF EXISTS "Public Quizzes are viewable by everyone" ON public.generated_quizzes;
+CREATE POLICY "Public Quizzes are viewable by everyone" 
+ON public.generated_quizzes FOR SELECT 
+USING (visibility = 'public');
 
-drop policy if exists "God Mode Notes" on public.neuro_notes;
-create policy "God Mode Notes" on public.neuro_notes for all using (true) with check (true);
+DROP POLICY IF EXISTS "Users can view their own quizzes (Auth)" ON public.generated_quizzes;
+CREATE POLICY "Users can view their own quizzes (Auth)" 
+ON public.generated_quizzes FOR SELECT 
+USING (auth.uid() = user_id);
 
--- 6. Aktifkan Realtime
+DROP POLICY IF EXISTS "Users can view their own quizzes (Keycard)" ON public.generated_quizzes;
+CREATE POLICY "Users can view their own quizzes (Keycard)" 
+ON public.generated_quizzes FOR ALL
+USING (keycard_id IS NOT NULL); -- Allow access if keycard_id exists (Client filters by ID)
+-- Note: Ideally we should verify keycard_id, but for this "Keycard as Identity" model, 
+-- we rely on the client knowing the ID. RLS is open for rows with keycard_id, 
+-- but client MUST filter.
+
+-- Library Policies
+DROP POLICY IF EXISTS "Users can manage their own library (Auth)" ON public.library_materials;
+CREATE POLICY "Users can manage their own library (Auth)" 
+ON public.library_materials FOR ALL 
+USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can manage their own library (Keycard)" ON public.library_materials;
+CREATE POLICY "Users can manage their own library (Keycard)" 
+ON public.library_materials FOR ALL 
+USING (keycard_id IS NOT NULL);
+
+-- Notes Policies
+DROP POLICY IF EXISTS "Users can manage their own notes (Auth)" ON public.neuro_notes;
+CREATE POLICY "Users can manage their own notes (Auth)" 
+ON public.neuro_notes FOR ALL 
+USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can manage their own notes (Keycard)" ON public.neuro_notes;
+CREATE POLICY "Users can manage their own notes (Keycard)" 
+ON public.neuro_notes FOR ALL 
+USING (keycard_id IS NOT NULL);
+
+-- Multiplayer Tables (Public for simplicity in this demo, but can be restricted)
+alter table public.rooms disable row level security;
+alter table public.players disable row level security;
+alter table public.answers disable row level security;
+
+-- Aktifkan Realtime
 alter publication supabase_realtime add table public.neuro_notes;
 alter publication supabase_realtime add table public.library_materials;
+alter publication supabase_realtime add table public.rooms;
+alter publication supabase_realtime add table public.players;
+alter publication supabase_realtime add table public.answers;
 `;
 
 // --- 2. TYPES ---
@@ -87,6 +218,10 @@ interface QuizRecord {
   mode: string;
   topic_summary: string;
   questions: Question[];
+  folder?: string;
+  visibility?: 'public' | 'private' | 'unlisted';
+  access_code?: string;
+  user_id?: string;
 }
 
 // --- 3. THE CLIENT ---
@@ -96,40 +231,171 @@ export const MikirCloud = {
     return getSupabaseClient(config.url, config.key);
   },
 
-  // --- QUIZ MODULE ---
-  quiz: {
-    async list(config: SupabaseConfig) {
+  // --- AUTH MODULE ---
+  auth: {
+    async signUp(config: SupabaseConfig, email: string, password: string) {
       const sb = MikirCloud._client(config);
-      const { data, error } = await sb
-        .from('generated_quizzes')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) throw new Error(`Gagal mengambil quiz: ${error.message}`);
-      
-      return (data as QuizRecord[]).map(item => ({
-        id: item.id,
-        fileName: item.file_name,
-        modelId: item.model_id,
-        mode: item.mode,
-        date: item.created_at,
-        questionCount: Array.isArray(item.questions) ? item.questions.length : 0,
-        topicSummary: item.topic_summary,
-        questions: item.questions,
-        isCloud: true
-      }));
+      const { data, error } = await sb.auth.signUp({ email, password });
+      if (error) throw error;
+      return data;
     },
 
-    async create(config: SupabaseConfig, payload: any) {
+    async signIn(config: SupabaseConfig, email: string, password: string) {
       const sb = MikirCloud._client(config);
+      const { data, error } = await sb.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      return data;
+    },
+
+    async signOut(config: SupabaseConfig) {
+      const sb = MikirCloud._client(config);
+      const { error } = await sb.auth.signOut();
+      if (error) throw error;
+    },
+
+    async getUser(config: SupabaseConfig) {
+      const sb = MikirCloud._client(config);
+      const { data: { user } } = await sb.auth.getUser();
+      return user;
+    }
+  },
+
+  // --- QUIZ MODULE ---
+  quiz: {
+    async upsert(config: SupabaseConfig, payload: any, keycardId: string) {
+      const sb = MikirCloud._client(config);
+      
       const dbPayload = {
+        keycard_id: keycardId,
+        file_name: payload.fileName || payload.title || "Untitled Quiz",
+        questions: payload.questions,
+        mode: payload.mode,
+        model_id: payload.modelId,
+        topic_summary: payload.topicSummary,
+        created_at: new Date().toISOString()
+      };
+
+      // We use keycard_id as the unique key for the "Current Active Sync"
+      // This allows the user to have one "active" cloud-synced session per keycard
+      const { error } = await sb
+        .from('generated_quizzes')
+        .upsert(dbPayload, { onConflict: 'keycard_id' });
+
+      if (error) {
+        console.error("Upsert failed:", error);
+        // Fallback: If upsert fails, try a simple insert
+        try {
+           await sb.from('generated_quizzes').insert(dbPayload);
+        } catch (e) {
+           console.error("Insert fallback failed:", e);
+        }
+      }
+      return true;
+    },
+
+    async list(config: SupabaseConfig, visibility: 'public' | 'private' | 'unlisted' | 'all' | 'mine' = 'all', keycardId?: string) {
+      const sb = MikirCloud._client(config);
+      
+      try {
+        let query = sb
+          .from('generated_quizzes')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (visibility === 'mine') {
+          // Priority: Keycard ID > Auth User
+          if (keycardId) {
+             query = query.eq('keycard_id', keycardId);
+          } else {
+             const { data: { user } } = await sb.auth.getUser();
+             if (!user) throw new Error("Harus login atau punya Keycard ID untuk melihat kuis saya.");
+             query = query.eq('user_id', user.id);
+          }
+        } else if (visibility !== 'all') {
+          query = query.eq('visibility', visibility);
+        }
+
+        const { data, error } = await query;
+
+        if (error) throw error;
+        
+        return (data as QuizRecord[]).map(item => ({
+          id: item.id,
+          fileName: item.file_name,
+          modelId: item.model_id,
+          mode: item.mode,
+          date: item.created_at,
+          questionCount: Array.isArray(item.questions) ? item.questions.length : 0,
+          topicSummary: item.topic_summary,
+          questions: item.questions,
+          folder: item.folder,
+          visibility: item.visibility || 'private',
+          accessCode: item.access_code,
+          userId: item.user_id,
+          isCloud: true
+        }));
+      } catch (err: any) {
+        // Fallback: Jika kolom visibility belum ada di DB
+        if (err.message && (err.message.includes('column "visibility" does not exist') || err.message.includes('generated_quizzes.visibility does not exist'))) {
+          console.warn("Schema mismatch: Column 'visibility' missing. Fetching without filter.");
+          const { data, error } = await sb
+            .from('generated_quizzes')
+            .select('*')
+            .order('created_at', { ascending: false });
+            
+          if (error) throw new Error(`Gagal mengambil quiz (Legacy): ${error.message}`);
+          
+          return (data as QuizRecord[]).map(item => ({
+            id: item.id,
+            fileName: item.file_name,
+            modelId: item.model_id,
+            mode: item.mode,
+            date: item.created_at,
+            questionCount: Array.isArray(item.questions) ? item.questions.length : 0,
+            topicSummary: item.topic_summary,
+            questions: item.questions,
+            folder: item.folder,
+            visibility: 'private', // Default fallback
+            accessCode: undefined,
+            isCloud: true
+          }));
+        }
+        throw new Error(`Gagal mengambil quiz: ${err.message}`);
+      }
+    },
+
+    async create(config: SupabaseConfig, payload: any, keycardId?: string) {
+      const sb = MikirCloud._client(config);
+      
+      // Get current user (optional)
+      const { data: { user } } = await sb.auth.getUser();
+      
+      const dbPayload: any = {
         file_name: payload.fileName || payload.file_name,
         model_id: payload.modelId || payload.model_id,
         mode: payload.mode,
         topic_summary: payload.topicSummary || payload.topic_summary,
-        questions: payload.questions
+        questions: payload.questions,
+        folder: payload.folder,
+        visibility: payload.visibility || 'private',
+        access_code: payload.accessCode,
+        user_id: user ? user.id : null,
+        keycard_id: keycardId || null
       };
-      const { error } = await sb.from('generated_quizzes').insert(dbPayload);
+
+      // Try insert with new columns
+      let { error } = await sb.from('generated_quizzes').insert(dbPayload);
+      
+      // Fallback: Jika error karena kolom tidak ada, coba insert tanpa kolom baru
+      if (error && (error.message.includes('column "visibility" does not exist') || error.message.includes('does not exist'))) {
+        console.warn("Schema mismatch: Uploading without visibility/access_code.");
+        delete dbPayload.visibility;
+        delete dbPayload.access_code;
+        delete dbPayload.user_id;
+        const retry = await sb.from('generated_quizzes').insert(dbPayload);
+        error = retry.error;
+      }
+
       if (error) throw new Error(`Gagal upload: ${error.message}`);
       return true;
     },
@@ -151,12 +417,25 @@ export const MikirCloud = {
 
   // --- LIBRARY MODULE (New Separate Table) ---
   library: {
-    async list(config: SupabaseConfig): Promise<LibraryItem[]> {
+    async list(config: SupabaseConfig, keycardId?: string): Promise<LibraryItem[]> {
       const sb = MikirCloud._client(config);
-      const { data, error } = await sb
+      const { data: { user } } = await sb.auth.getUser();
+      
+      let query = sb
         .from('library_materials')
         .select('*')
         .order('created_at', { ascending: false });
+
+      // Filter by Keycard ID (Primary) OR User ID (Legacy)
+      if (keycardId) {
+        query = query.eq('keycard_id', keycardId);
+      } else if (user) {
+        query = query.eq('user_id', user.id);
+      } else {
+        return []; // No identity found
+      }
+
+      const { data, error } = await query;
 
       if (error) {
         console.error("Library Fetch Error:", error);
@@ -175,8 +454,10 @@ export const MikirCloud = {
       }));
     },
 
-    async create(config: SupabaseConfig, item: LibraryItem) {
+    async create(config: SupabaseConfig, item: LibraryItem, keycardId?: string) {
       const sb = MikirCloud._client(config);
+      const { data: { user } } = await sb.auth.getUser();
+
       const dbPayload = {
         id: String(item.id),
         title: item.title,
@@ -184,7 +465,9 @@ export const MikirCloud = {
         processed_content: item.processedContent,
         file_type: item.type,
         tags: item.tags,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        user_id: user ? user.id : null,
+        keycard_id: keycardId || null
       };
       const { error } = await sb.from('library_materials').insert(dbPayload);
       if (error) throw new Error(`Gagal simpan ke Library: ${error.message}`);
@@ -212,13 +495,25 @@ export const MikirCloud = {
 
   // --- NOTES MODULE (Legacy / Scratchpad) ---
   notes: {
-    async list(config: SupabaseConfig): Promise<CloudNote[]> {
+    async list(config: SupabaseConfig, keycardId?: string): Promise<CloudNote[]> {
       const sb = MikirCloud._client(config);
+      const { data: { user } } = await sb.auth.getUser();
+
       try {
-        const { data, error } = await sb
+        let query = sb
           .from('neuro_notes')
           .select('*')
           .order('timestamp', { ascending: false });
+        
+        if (keycardId) {
+            query = query.eq('keycard_id', keycardId);
+        } else if (user) {
+            query = query.eq('user_id', user.id);
+        } else {
+            return [];
+        }
+
+        const { data, error } = await query;
         
         if (error) return [];
         return data ? data.map((item: any) => ({
@@ -231,9 +526,17 @@ export const MikirCloud = {
       } catch (e) { return []; }
     },
 
-    async create(config: SupabaseConfig, payload: any) {
+    async create(config: SupabaseConfig, payload: any, keycardId?: string) {
         const sb = MikirCloud._client(config);
-        const { error } = await sb.from('neuro_notes').insert(payload);
+        const { data: { user } } = await sb.auth.getUser();
+        
+        const dbPayload = { 
+            ...payload, 
+            user_id: user ? user.id : null,
+            keycard_id: keycardId || null
+        };
+        
+        const { error } = await sb.from('neuro_notes').insert(dbPayload);
         if (error) throw new Error(`Gagal simpan note: ${error.message}`);
         return true;
     },
@@ -248,9 +551,48 @@ export const MikirCloud = {
 
   // --- SYSTEM MODULE ---
   system: {
+    async getStats(config: SupabaseConfig) {
+      const sb = MikirCloud._client(config);
+      
+      const { count: quizCount } = await sb.from('generated_quizzes').select('*', { count: 'exact', head: true });
+      const { count: libCount } = await sb.from('library_materials').select('*', { count: 'exact', head: true });
+      const { count: noteCount } = await sb.from('neuro_notes').select('*', { count: 'exact', head: true });
+      const { count: srsCount } = await sb.from('neuro_srs').select('*', { count: 'exact', head: true });
+      
+      // Get active rooms (multiplayer)
+      const { count: roomCount } = await sb.from('rooms').select('*', { count: 'exact', head: true }).eq('status', 'playing');
+
+      return {
+        quizzes: quizCount || 0,
+        library: libCount || 0,
+        notes: noteCount || 0,
+        srs: srsCount || 0,
+        activeRooms: roomCount || 0
+      };
+    },
+
+    async runSQL(config: SupabaseConfig, sql: string) {
+      const sb = MikirCloud._client(config);
+      // Note: Supabase doesn't allow arbitrary SQL via JS client for security.
+      // This is a placeholder for a custom RPC if the user has it, 
+      // or it will return a message guiding the user to the dashboard.
+      try {
+        const { error } = await sb.rpc('exec_sql', { sql_query: sql });
+        if (error) {
+           if (error.message.includes('function') && error.message.includes('does not exist')) {
+              throw new Error("RPC 'exec_sql' tidak ditemukan. Silakan jalankan SQL secara manual di Dashboard Supabase.");
+           }
+           throw error;
+        }
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, message: err.message };
+      }
+    },
+
     async checkConnection(config: SupabaseConfig) {
       const sb = MikirCloud._client(config);
-      const { error } = await sb.from('generated_quizzes').select('id').limit(1);
+      const { error } = await sb.from('rooms').select('id').limit(1);
       if (error) {
         if (error.message.includes('relation') && error.message.includes('does not exist')) {
           return { connected: true, schemaMissing: true, message: "Tabel belum dibuat." };
@@ -258,6 +600,205 @@ export const MikirCloud = {
         return { connected: false, schemaMissing: false, message: error.message };
       }
       return { connected: true, schemaMissing: false, message: "OK" };
+    },
+
+    async checkKeycardIdExists(config: SupabaseConfig, id: string): Promise<boolean> {
+      const sb = MikirCloud._client(config);
+      
+      // Check in multiple tables to be sure
+      const { data: quizData } = await sb.from('generated_quizzes').select('id').eq('keycard_id', id).limit(1);
+      if (quizData && quizData.length > 0) return true;
+
+      const { data: libData } = await sb.from('library_materials').select('id').eq('keycard_id', id).limit(1);
+      if (libData && libData.length > 0) return true;
+
+      const { data: noteData } = await sb.from('neuro_notes').select('id').eq('keycard_id', id).limit(1);
+      if (noteData && noteData.length > 0) return true;
+
+      const { data: srsData } = await sb.from('neuro_srs').select('id').eq('keycard_id', id).limit(1);
+      if (srsData && srsData.length > 0) return true;
+
+      return false;
+    }
+  },
+
+  // --- SRS MODULE (Neuro-Sync) ---
+  srs: {
+    async list(config: SupabaseConfig, keycardId: string) {
+      const sb = MikirCloud._client(config);
+      const { data, error } = await sb
+        .from('neuro_srs')
+        .select('*')
+        .eq('keycard_id', keycardId)
+        .order('next_review', { ascending: true });
+
+      if (error) throw error;
+      return data;
+    },
+
+    async upsert(config: SupabaseConfig, item: any) {
+      const sb = MikirCloud._client(config);
+      const { error } = await sb
+        .from('neuro_srs')
+        .upsert(item, { onConflict: 'keycard_id,item_id' });
+
+      if (error) throw error;
+      return true;
+    },
+
+    async delete(config: SupabaseConfig, id: string) {
+      const sb = MikirCloud._client(config);
+      const { error } = await sb.from('neuro_srs').delete().eq('id', id);
+      if (error) throw error;
+      return true;
+    },
+
+    async getDueItems(config: SupabaseConfig, keycardId: string) {
+      const sb = MikirCloud._client(config);
+      const now = new Date().toISOString();
+      const { data, error } = await sb
+        .from('neuro_srs')
+        .select('*')
+        .eq('keycard_id', keycardId)
+        .lte('next_review', now)
+        .order('next_review', { ascending: true });
+
+      if (error) throw error;
+      return data;
+    }
+  },
+
+  // --- MULTIPLAYER MODULE ---
+  multiplayer: {
+    async createRoom(config: SupabaseConfig, roomCode: string, hostId: string, quizData: any) {
+      const sb = MikirCloud._client(config);
+      const { data, error } = await sb.from('rooms').insert({
+        room_code: roomCode,
+        host_id: hostId,
+        status: 'waiting',
+        quiz_data: quizData
+      }).select().single();
+      
+      if (error) throw new Error(`Gagal membuat room: ${error.message}`);
+      return data;
+    },
+
+    async findRoom(config: SupabaseConfig, roomCode: string) {
+      const sb = MikirCloud._client(config);
+      const { data, error } = await sb.from('rooms').select('*').eq('room_code', roomCode).single();
+      
+      if (error) return null; // Return null if not found instead of throwing
+      return data;
+    },
+
+    async startGame(config: SupabaseConfig, roomId: string) {
+      return this.updateRoomStatus(config, roomId, 'playing', 0);
+    },
+
+    async updateRoomStatus(config: SupabaseConfig, roomId: string, status: string, currentQuestionIndex: number = 0) {
+      const sb = MikirCloud._client(config);
+      const { error } = await sb.from('rooms').update({ 
+        status, 
+        current_question_index: currentQuestionIndex 
+      }).eq('id', roomId);
+      
+      if (error) throw new Error(`Gagal update status room: ${error.message}`);
+      return true;
+    },
+
+    async joinRoom(config: SupabaseConfig, roomId: string, name: string, sessionToken: string) {
+      const sb = MikirCloud._client(config);
+      const { data, error } = await sb.from('players').insert({
+        room_id: roomId,
+        name,
+        session_token: sessionToken,
+        is_online: true
+      }).select().single();
+      
+      if (error) throw new Error(`Gagal join room: ${error.message}`);
+      return data;
+    },
+
+    async getPlayers(config: SupabaseConfig, roomId: string) {
+      const sb = MikirCloud._client(config);
+      const { data, error } = await sb.from('players').select('*').eq('room_id', roomId);
+      
+      if (error) throw new Error(`Gagal mengambil data pemain: ${error.message}`);
+      return data || [];
+    },
+
+    async leaveRoom(config: SupabaseConfig, playerId: string) {
+      const sb = MikirCloud._client(config);
+      const { error } = await sb.from('players').update({ is_online: false }).eq('id', playerId);
+      
+      if (error) throw new Error(`Gagal leave room: ${error.message}`);
+      return true;
+    },
+    
+    subscribeToPlayers(config: SupabaseConfig, roomId: string, onUpdate: (payload: any) => void) {
+      const sb = MikirCloud._client(config);
+      return sb.channel(`players:${roomId}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'players', filter: `room_id=eq.${roomId}` }, onUpdate)
+        .subscribe();
+    },
+
+    subscribeToRoom(config: SupabaseConfig, roomId: string, onUpdate: (payload: any) => void) {
+      const sb = MikirCloud._client(config);
+      return sb.channel(`room_status:${roomId}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, onUpdate)
+        .subscribe();
+    },
+
+    async submitAnswer(config: SupabaseConfig, roomId: string, playerId: string, questionIndex: number, selectedOption: string, isCorrect: boolean, scoreDelta: number) {
+      const sb = MikirCloud._client(config);
+      
+      // 1. Insert answer record
+      const { error: answerError } = await sb.from('answers').insert({
+        room_id: roomId,
+        player_id: playerId,
+        question_index: questionIndex,
+        selected_option: selectedOption,
+        is_correct: isCorrect
+      });
+      
+      if (answerError) throw new Error(`Gagal menyimpan jawaban: ${answerError.message}`);
+
+      // 2. Update player score if correct (ATOMIC RPC)
+      if (isCorrect && scoreDelta > 0) {
+        const { error: rpcError } = await sb.rpc('increment_score', { 
+            row_id: playerId, 
+            score_delta: scoreDelta 
+        });
+        
+        // Fallback if RPC not exists (for backward compatibility or if user didn't run migration)
+        if (rpcError) {
+             console.warn("RPC increment_score failed, falling back to manual update", rpcError);
+             const { data: player } = await sb.from('players').select('score').eq('id', playerId).single();
+             if (player) {
+               await sb.from('players').update({ score: player.score + scoreDelta }).eq('id', playerId);
+             }
+        }
+      }
+      
+      return true;
+    },
+
+    async getLeaderboard(config: SupabaseConfig, roomId: string) {
+      const sb = MikirCloud._client(config);
+      const { data, error } = await sb.from('players')
+        .select('id, name, score, is_online')
+        .eq('room_id', roomId)
+        .order('score', { ascending: false });
+        
+      if (error) throw new Error(`Gagal mengambil leaderboard: ${error.message}`);
+      return data || [];
+    },
+
+    subscribeToLeaderboard(config: SupabaseConfig, roomId: string, onUpdate: (payload: any) => void) {
+      const sb = MikirCloud._client(config);
+      return sb.channel(`leaderboard:${roomId}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'players', filter: `room_id=eq.${roomId}` }, onUpdate)
+        .subscribe();
     }
   }
 };

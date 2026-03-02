@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Upload, FileText, Layout, Zap, TrendingUp, Skull, BookOpen, Type, Cloud, RefreshCw, CheckCircle2, X, PlayCircle, Layers, Settings2, Sparkles, Folder, Target, BrainCircuit, Shuffle, Cpu, ChevronDown, MessageSquarePlus, Check } from 'lucide-react';
+import { Upload, FileText, Layout, Zap, TrendingUp, Skull, BookOpen, Type, Cloud, RefreshCw, CheckCircle2, X, PlayCircle, Layers, Settings2, Sparkles, Folder, Target, BrainCircuit, Shuffle, Cpu, ChevronDown, MessageSquarePlus, Check, Link as LinkIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AVAILABLE_MODELS, ModelConfig, QuizMode, ExamStyle, AiProvider, CloudNote, Question, LibraryItem, ModelOption } from '../types';
 import { GlassButton } from './GlassButton';
@@ -8,6 +8,7 @@ import { DashboardMascot } from './DashboardMascot';
 import { StudyScheduler } from './StudyScheduler';
 import { fetchNotesFromSupabase, getLibraryItems, getApiKey } from '../services/storageService';
 import { fetchGroqModels } from '../services/groqService';
+import { fetchUrlContent } from '../services/fileService';
 import { getDueItems } from '../services/srsService';
 import { notifyReviewDue } from '../services/kaomojiNotificationService';
 import { FlashcardScreen } from './FlashcardScreen';
@@ -33,7 +34,7 @@ const BLOOM_LEVELS = [
 ];
 
 export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue, hasActiveSession }) => {
-  const [inputMethod, setInputMethod] = useState<'library' | 'upload' | 'topic'>('library');
+  const [inputMethod, setInputMethod] = useState<'library' | 'upload' | 'topic' | 'url'>('library');
   
   // Library State
   const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
@@ -45,6 +46,9 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
   // Manual Topic State
   const [topic, setTopic] = useState(''); 
   
+  // URL State
+  const [urlInput, setUrlInput] = useState('');
+
   // Config State
   const [provider, setProvider] = useState<AiProvider>('gemini');
   const [modelId, setModelId] = useState(AVAILABLE_MODELS[0].id);
@@ -57,6 +61,7 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
   const [enableRetention, setEnableRetention] = useState(false); 
   const [enableMixedTypes, setEnableMixedTypes] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [folder, setFolder] = useState('');
   
   // UI State
   const [dragActive, setDragActive] = useState(false);
@@ -66,13 +71,17 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
   const [isGenerating, setIsGenerating] = useState(false);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
 
+  const hasApiKey = !!getApiKey('gemini') || !!getApiKey('groq');
+
   useEffect(() => {
     getLibraryItems().then(setLibraryItems);
-    const dueItems = getDueItems();
-    if (dueItems.length > 0) {
-      setDueCards(dueItems.map(item => item.question));
-      notifyReviewDue(dueItems.length);
-    }
+    getDueItems().then(items => {
+      if (items && items.length > 0) {
+        // Map SRSItem to Question (content)
+        setDueCards(items.map(item => item.content as Question));
+        notifyReviewDue(items.length);
+      }
+    });
   }, []);
 
   // --- DYNAMIC MODEL FETCHING ---
@@ -94,8 +103,12 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
              }
           } else {
              setDynamicModels(AVAILABLE_MODELS);
+             setModelId("");
           }
           setIsLoadingModels(false);
+        } else {
+          setDynamicModels(AVAILABLE_MODELS);
+          setModelId("");
         }
       } else {
         // Reset to defaults for Gemini
@@ -112,7 +125,11 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
       setProvider(newProvider);
       // Auto-select first model of that provider to prevent mismatch
       const firstModel = dynamicModels.find(m => m.provider === newProvider) || AVAILABLE_MODELS.find(m => m.provider === newProvider);
-      if (firstModel) setModelId(firstModel.id);
+      if (firstModel) {
+          setModelId(firstModel.id);
+      } else {
+          setModelId("");
+      }
   };
 
   const handleFilesUpload = (newFiles: FileList | null) => {
@@ -140,11 +157,13 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
     });
   };
 
-  const handleStart = () => {
+  const handleStart = async () => {
     if (inputMethod === 'library' && selectedLibraryIds.length === 0) return alert("Pilih minimal 1 materi dari Library!");
     if (inputMethod === 'upload' && files.length === 0) return alert("Upload file dulu!");
     if (inputMethod === 'topic' && !topic.trim()) return alert("Isi topik dulu!");
+    if (inputMethod === 'url' && !urlInput.trim()) return alert("Isi URL dulu!");
     if (!topic && inputMethod === 'library') return alert("Isi 'Fokus Topik' agar AI tidak halusinasi!");
+    if (!modelId) return alert("Pilih model AI terlebih dahulu! Jika opsi kosong, pastikan API Key sudah diatur di Settings.");
 
     setIsGenerating(true);
     
@@ -154,6 +173,16 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
     if (inputMethod === 'library') {
        const selectedItems = libraryItems.filter(item => selectedLibraryIds.includes(String(item.id)));
        finalLibraryContext = selectedItems.map(item => `[SOURCE: ${item.title}]\n${item.processedContent || item.content}`).join("\n\n");
+    } else if (inputMethod === 'url') {
+       try {
+         const urlContent = await fetchUrlContent(urlInput);
+         finalLibraryContext = `[SOURCE: ${urlInput}]\n${urlContent}`;
+         if (!finalTopic) finalTopic = "Materi dari URL";
+       } catch (error: any) {
+         alert(error.message);
+         setIsGenerating(false);
+         return;
+       }
     }
 
     setTimeout(() => {
@@ -164,7 +193,8 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
           customPrompt,
           libraryContext: finalLibraryContext,
           enableRetention,
-          enableMixedTypes
+          enableMixedTypes,
+          folder: folder || undefined
         });
         setTimeout(() => setIsGenerating(false), 2000); 
     }, 100);
@@ -172,13 +202,14 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
 
   const isReady = (inputMethod === 'library' && selectedLibraryIds.length > 0 && topic.length > 2) || 
                   (inputMethod === 'upload' && files.length > 0) || 
-                  (inputMethod === 'topic' && topic.trim().length > 3);
+                  (inputMethod === 'topic' && topic.trim().length > 3) ||
+                  (inputMethod === 'url' && urlInput.trim().length > 5);
 
   // --- SEGMENTED CONTROL COMPONENT ---
   const InputTab = ({ id, icon: Icon, label }: { id: typeof inputMethod, icon: any, label: string }) => (
     <button 
         onClick={() => setInputMethod(id)} 
-        className={`relative flex items-center justify-center space-x-2 px-6 py-3 rounded-xl transition-all z-10 ${inputMethod === id ? 'text-indigo-700 font-bold' : 'text-slate-500 font-medium hover:text-slate-700'}`}
+        className={`relative flex items-center justify-center space-x-2 px-4 py-2 md:px-6 md:py-3 rounded-xl transition-all z-10 ${inputMethod === id ? 'text-indigo-700 font-bold' : 'text-slate-500 font-medium hover:text-slate-700'}`}
     >
         {inputMethod === id && (
             <motion.div 
@@ -188,7 +219,7 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
                 transition={{ type: "spring", stiffness: 300, damping: 30 }}
             />
         )}
-        <span className="relative z-10 flex items-center gap-2"><Icon size={18} /> {label}</span>
+        <span className="relative z-10 flex items-center gap-2 text-sm md:text-base"><Icon size={18} /> <span className="hidden md:inline">{label}</span></span>
     </button>
   );
 
@@ -230,6 +261,7 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
           <InputTab id="library" icon={BookOpen} label="Library" />
           <InputTab id="upload" icon={Upload} label="Upload" />
           <InputTab id="topic" icon={Type} label="Manual" />
+          <InputTab id="url" icon={LinkIcon} label="URL" />
         </div>
 
         {/* --- MAIN INPUT AREA --- */}
@@ -307,6 +339,24 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
                     <textarea value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="Paste materi kuliah, artikel, atau tulis topik spesifik di sini..." className="w-full h-52 bg-white border border-slate-200 rounded-[2rem] p-6 text-slate-700 text-lg font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent shadow-inner resize-none transition-shadow" />
                 </motion.div>
             )}
+
+            {inputMethod === 'url' && (
+                <motion.div key="url" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                    <div className="w-full h-52 bg-white border border-slate-200 rounded-[2rem] p-6 flex flex-col justify-center shadow-inner">
+                        <label className="text-sm font-bold text-slate-500 mb-2 flex items-center">
+                            <LinkIcon size={16} className="mr-2" /> Masukkan URL Artikel / YouTube
+                        </label>
+                        <input 
+                            type="url" 
+                            value={urlInput} 
+                            onChange={(e) => setUrlInput(e.target.value)} 
+                            placeholder="https://id.wikipedia.org/wiki/... atau https://youtube.com/watch?v=..." 
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 text-slate-700 text-lg font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-shadow" 
+                        />
+                        <p className="text-xs text-slate-400 mt-3">AI akan mencoba membaca teks dari halaman web atau subtitle dari video YouTube tersebut.</p>
+                    </div>
+                </motion.div>
+            )}
           </AnimatePresence>
         </div>
 
@@ -350,17 +400,36 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
                  <select 
                     value={modelId}
                     onChange={(e) => setModelId(e.target.value)}
-                    disabled={isLoadingModels}
+                    disabled={isLoadingModels || dynamicModels.filter(m => m.provider === provider).length === 0}
                     className="w-full appearance-none bg-white border border-slate-200 text-slate-700 font-bold text-sm rounded-xl px-4 py-2.5 pr-10 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 disabled:opacity-50"
                  >
-                    {dynamicModels.filter(m => m.provider === provider).map(m => (
-                       <option key={m.id} value={m.id}>{m.label}</option>
-                    ))}
+                    {dynamicModels.filter(m => m.provider === provider).length > 0 ? (
+                       dynamicModels.filter(m => m.provider === provider).map(m => (
+                          <option key={m.id} value={m.id}>{m.label}</option>
+                       ))
+                    ) : (
+                       <option value="">{getApiKey(provider) ? 'Gagal memuat model' : 'Masukkan API Key di Settings'}</option>
+                    )}
                  </select>
                  <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
                     {isLoadingModels ? <RefreshCw className="animate-spin" size={14} /> : <ChevronDown size={14} />}
                  </div>
               </div>
+           </div>
+
+           {/* --- FOLDER CONTROL --- */}
+           <div className="bg-white/50 p-4 rounded-3xl border border-white shadow-sm flex items-center">
+              <div className="flex items-center gap-2 text-slate-500 mr-4">
+                 <Folder size={18} />
+                 <span className="text-sm font-bold">Folder</span>
+              </div>
+              <input 
+                 type="text" 
+                 value={folder}
+                 onChange={(e) => setFolder(e.target.value)}
+                 placeholder="Opsional: Nama folder (misal: Biologi, UTS)"
+                 className="flex-1 bg-white border border-slate-200 text-slate-700 font-medium text-sm rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+              />
            </div>
 
            {/* Mode Selection with Tactile Cards */}
@@ -491,22 +560,52 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
            </div>
         </div>
 
-        <div className="mt-8">
-           <button 
-             onClick={handleStart} 
-             disabled={!isReady || isGenerating} 
-             className="btn-tactile w-full py-4 bg-slate-900 border-slate-700 text-white rounded-2xl font-bold text-lg shadow-xl shadow-slate-900/10 flex items-center justify-center hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
-           >
-             {isGenerating ? <RefreshCw className="animate-spin mr-2" /> : <Sparkles className="mr-2 fill-yellow-400 text-yellow-400" />}
-             {inputMethod === 'library' ? `Generate dari ${selectedLibraryIds.length} Materi` : 'Mulai Magic'}
-           </button>
+        <div className="mt-8 space-y-4">
+           {!hasApiKey && (
+              <div className="bg-amber-50 border border-amber-200 text-amber-800 p-4 rounded-2xl text-sm flex items-start shadow-sm">
+                 <Settings2 className="mr-3 shrink-0 mt-0.5 text-amber-600" size={18} />
+                 <div>
+                    <span className="font-bold block mb-1">API Key Belum Diatur</span>
+                    <p className="opacity-90">Fitur "Generate AI" dinonaktifkan. Silakan atur API Key (Gemini/Groq) di menu <b>Settings</b> untuk mulai membuat soal otomatis.</p>
+                    <p className="text-xs mt-2 text-amber-700 font-medium">💡 Terdapat tutorial cara mendapatkan API Key di menu Settings.</p>
+                 </div>
+              </div>
+           )}
+           <div className="flex gap-4">
+             <button 
+               onClick={handleStart} 
+               disabled={!isReady || isGenerating || !hasApiKey} 
+               className={`btn-tactile flex-[2] py-4 rounded-2xl font-bold text-lg shadow-xl flex items-center justify-center transition-all ${!hasApiKey ? 'bg-slate-200 text-slate-400 border-slate-300 cursor-not-allowed shadow-none' : 'bg-slate-900 border-slate-700 text-white shadow-slate-900/10 hover:bg-slate-800'}`}
+             >
+               {isGenerating ? <RefreshCw className="animate-spin mr-2" /> : <Sparkles className={`mr-2 ${!hasApiKey ? 'text-slate-400 fill-slate-400' : 'fill-yellow-400 text-yellow-400'}`} />}
+               {inputMethod === 'library' ? `Generate dari ${selectedLibraryIds.length} Materi` : 'Mulai Magic'}
+             </button>
+             <button
+               disabled
+               className="btn-tactile flex-1 py-4 bg-white border-slate-200 text-slate-400 rounded-2xl font-bold text-sm shadow-sm flex items-center justify-center cursor-not-allowed"
+               title="Fitur Buat Soal Manual sedang dalam pengembangan"
+             >
+               <Type className="mr-2" size={18} />
+               Manual (Soon)
+             </button>
+           </div>
         </div>
 
       </motion.div>
 
       <StudyScheduler isOpen={isSchedulerOpen} onClose={() => setIsSchedulerOpen(false)} defaultTopic={topic} />
       <AnimatePresence>
-        {isReviewing && <FlashcardScreen questions={dueCards} onClose={() => { setIsReviewing(false); setDueCards(getDueItems().map(i => i.question)); }} />}
+        {isReviewing && (
+          <FlashcardScreen 
+            questions={dueCards} 
+            onClose={() => { 
+              setIsReviewing(false); 
+              getDueItems().then(items => {
+                if (items) setDueCards(items.map(i => i.content as Question));
+              });
+            }} 
+          />
+        )}
       </AnimatePresence>
     </div>
   );

@@ -1,6 +1,6 @@
 /**
  * ==========================================
- * BROWSER NOTIFICATION SERVICE
+ * BROWSER NOTIFICATION & SCHEDULING SERVICE
  * ==========================================
  */
 
@@ -30,7 +30,7 @@ export const scheduleDailyReminder = (time: string) => { // format "HH:MM"
   // Send immediate feedback
   if (Notification.permission === "granted") {
     new Notification("Pengingat Diaktifkan! ⏰", {
-      body: `GlassQuiz akan mengingatkanmu setiap hari jam ${time}.`,
+      body: `Mikir (-•_•) akan mengingatkanmu setiap hari jam ${time}.`,
       icon: "https://cdn-icons-png.flaticon.com/512/3767/3767084.png" // Generic study icon
     });
   }
@@ -53,11 +53,6 @@ export const checkAndTriggerNotification = () => {
   // If already triggered today, skip
   if (lastTriggerDate === todayStr) return;
 
-  // Simple check: If current time is past the target time (within 1 hour window), trigger it
-  // This relies on the user opening the app or tab being open.
-  // For true background push without tab open, we'd need a Service Worker + Backend, 
-  // but for a simple client-side app, this checks "Did I miss my study time?" when opening.
-  
   const targetTime = new Date();
   targetTime.setHours(targetHours, targetMinutes, 0, 0);
 
@@ -69,4 +64,53 @@ export const checkAndTriggerNotification = () => {
       });
       localStorage.setItem('glassquiz_last_notification_date', todayStr);
   }
+};
+
+/**
+ * Generates and downloads an .ics file for calendar integration
+ */
+export const downloadICSFile = (time: string, topic: string = "Materi Umum") => {
+  const [hours, minutes] = time.split(':');
+  
+  // Create a date for today at the specified time
+  const startDate = new Date();
+  startDate.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+  
+  // End time is 30 minutes later
+  const endDate = new Date(startDate.getTime() + 30 * 60000);
+
+  // Format date to ICS format: YYYYMMDDTHHMMSSZ
+  const formatDate = (date: Date) => {
+    return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+  };
+
+  const icsContent = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Mikir App//Study Scheduler//ID',
+    'CALSCALE:GREGORIAN',
+    'BEGIN:VEVENT',
+    `DTSTART:${formatDate(startDate)}`,
+    `DTEND:${formatDate(endDate)}`,
+    'RRULE:FREQ=DAILY', // Daily recurrence
+    `SUMMARY:Belajar Rutin: ${topic}`,
+    'DESCRIPTION:Waktunya mengasah otak di aplikasi Mikir (-•_•)! Jangan lupa review materi hari ini.',
+    'STATUS:CONFIRMED',
+    'SEQUENCE:0',
+    'BEGIN:VALARM',
+    'TRIGGER:-PT10M', // Alarm 10 minutes before
+    'DESCRIPTION:Persiapan Belajar',
+    'ACTION:DISPLAY',
+    'END:VALARM',
+    'END:VEVENT',
+    'END:VCALENDAR'
+  ].join('\n');
+
+  const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
+  const link = document.createElement('a');
+  link.href = window.URL.createObjectURL(blob);
+  link.setAttribute('download', 'jadwal_belajar_mikir.ics');
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 };

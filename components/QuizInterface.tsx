@@ -1,23 +1,24 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { LogOut, Heart, Clock, AlertTriangle, SkipForward, X, ArrowLeft, ChevronLeft, Hand, Eye, Settings, Power } from 'lucide-react';
+import { LogOut, Heart, Clock, AlertTriangle, SkipForward, X, ArrowLeft, ChevronLeft, Hand, Eye, Settings, Power, Users, Trophy, ChevronDown, ChevronUp } from 'lucide-react';
 import { Question, QuizResult, QuizMode } from '../types';
 import { useGameSound } from '../hooks/useGameSound';
 import { GestureControl } from './GestureControl';
-import { addToGraveyard } from '../services/storageService';
+import { addToGraveyard, getSupabaseConfig } from '../services/storageService';
 import { UniversalQuestionCard } from './UniversalQuestionCard'; 
 import { EyeTrackingManager } from './EyeTrackingManager';
 import confetti from 'canvas-confetti';
 import { useExperimentalSettings } from '../contexts/ExperimentalSettingsContext';
 import { useCamera } from '../contexts/CameraContext';
+import { MikirCloud } from '../services/supabaseService';
+import { useAppStore } from '../store/useAppStore';
 
 interface QuizInterfaceProps {
-  questions: Question[];
-  mode: QuizMode;
   onComplete: (result: QuizResult) => void;
   onExit: () => void;
   onDelete?: () => void;
+  onAnswerSubmit?: (questionIndex: number, selectedOption: any, isCorrect: boolean, scoreDelta: number) => void;
 }
 
 const KAO = {
@@ -37,7 +38,11 @@ const KAO = {
   SHOCK: { face: "( ⊙ _ ⊙ )", color: "bg-purple-100 border-purple-300 text-purple-600", msg: "Waduh!" }
 };
 
-export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, onComplete, onExit, onDelete }) => {
+import { useMultiplayerSync } from '../hooks/useMultiplayerSync';
+import { useQuizTimer } from '../hooks/useQuizTimer';
+
+export const QuizInterface: React.FC<QuizInterfaceProps> = ({ onComplete, onExit, onDelete, onAnswerSubmit }) => {
+  const { questions, activeMode: mode, isMultiplayer, multiplayerRoomId: roomId, multiplayerPlayerId: playerId, isHost } = useAppStore();
   const [currentIndex, setCurrentIndex] = useState(0);
   const [userAnswer, setUserAnswer] = useState<any>(null); 
   const [isAnswered, setIsAnswered] = useState(false);
@@ -45,7 +50,6 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
   
   const [streak, setStreak] = useState(0);
   const [lives, setLives] = useState(3);
-  const [timeLeft, setTimeLeft] = useState(20);
   
   const [kaomojiState, setKaomojiState] = useState(KAO.IDLE);
   const [flashType, setFlashType] = useState<'none' | 'success' | 'error'>('none');
@@ -56,6 +60,9 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
   const { isExperimentalEnabled, toggleExperimental } = useExperimentalSettings();
   const { mode: cameraMode, setMode: setCameraMode } = useCamera();
   const [showSettings, setShowSettings] = useState(false);
+  const [showMobileLeaderboard, setShowMobileLeaderboard] = useState(false);
+
+  const { multiplayerScores } = useMultiplayerSync(setCurrentIndex);
 
   // Sync camera mode with experimental settings
   useEffect(() => {
@@ -79,15 +86,25 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
     }
   }, [currentIndex, questions, answers, currentQuestion.id]);
 
+  const handleAnswerRef = React.useRef<any>(null);
+  const { timeLeft, timeLeftRef } = useQuizTimer(currentIndex, isAnswered, (ans, isCorr) => handleAnswerRef.current?.(ans, isCorr));
+
   const handleAnswer = useCallback((answerInput: any, isCorrect: boolean) => {
     if (isAnswered) return;
     setUserAnswer(answerInput);
     setIsAnswered(true);
 
+    let scoreDelta = 0;
+
     if (isCorrect) {
       playCorrect();
       setStreak(s => s + 1);
       setFlashType('success');
+      
+      scoreDelta = 10;
+      if (mode === QuizMode.TIME_RUSH) {
+         scoreDelta += timeLeftRef.current;
+      }
       
       const nextStreak = streak + 1;
       if (nextStreak >= 3) {
@@ -106,6 +123,10 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
       if (mode === QuizMode.SURVIVAL) setLives(l => Math.max(0, l - 1));
     }
 
+    if (onAnswerSubmit) {
+      onAnswerSubmit(currentIndex, answerInput, isCorrect, scoreDelta);
+    }
+
     setAnswers(prev => {
         const existingIdx = prev.findIndex(a => a.questionId === currentQuestion.id);
         const newEntry = { 
@@ -122,7 +143,11 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
         }
         return [...prev, newEntry];
     });
-  }, [currentQuestion, streak, mode, playCorrect, playIncorrect, isAnswered]);
+  }, [currentQuestion, streak, mode, playCorrect, playIncorrect, isAnswered, onAnswerSubmit, currentIndex, timeLeftRef]);
+
+  useEffect(() => {
+    handleAnswerRef.current = handleAnswer;
+  }, [handleAnswer]);
 
   const handleNext = useCallback(() => {
     playClick();
@@ -130,6 +155,25 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
        finishQuiz();
        return;
     }
+
+    // Multiplayer Host Logic
+    if (isMultiplayer && isHost && roomId) {
+       const nextIndex = currentIndex + 1;
+       if (nextIndex < questions.length) {
+         const config = getSupabaseConfig();
+         if (config) {
+           MikirCloud.multiplayer.updateRoomStatus(config, roomId, 'playing', nextIndex).catch(console.error);
+         }
+         // Optimistic update
+         setCurrentIndex(nextIndex);
+         setKaomojiState(lives === 1 && mode === QuizMode.SURVIVAL ? KAO.SHOCK : KAO.IDLE);
+         setFlashType('none');
+       } else {
+         finishQuiz();
+       }
+       return;
+    }
+
     if (currentIndex < questions.length - 1) {
       setCurrentIndex(p => p + 1);
       setKaomojiState(lives === 1 && mode === QuizMode.SURVIVAL ? KAO.SHOCK : KAO.IDLE);
@@ -137,36 +181,33 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
     } else {
       finishQuiz();
     }
-  }, [currentIndex, questions.length, lives, mode, playClick]);
+  }, [currentIndex, questions.length, lives, mode, playClick, isMultiplayer, isHost, roomId]);
 
   const handlePrev = useCallback(() => {
+    if (isMultiplayer && !isHost) return; // Players cannot go back
     if (currentIndex > 0) {
         playClick();
+        
+        if (isMultiplayer && isHost && roomId) {
+           const prevIndex = currentIndex - 1;
+           const config = getSupabaseConfig();
+           if (config) {
+             MikirCloud.multiplayer.updateRoomStatus(config, roomId, 'playing', prevIndex).catch(console.error);
+           }
+           setCurrentIndex(prevIndex);
+           setFlashType('none');
+           return;
+        }
+
         setCurrentIndex(p => p - 1);
         setFlashType('none');
     }
-  }, [currentIndex, playClick]);
+  }, [currentIndex, playClick, isMultiplayer, isHost, roomId]);
 
   const finishQuiz = () => {
     const correctCount = answers.filter(a => a.isCorrect).length;
     onComplete({ correctCount, totalQuestions: questions.length, score: Math.round((correctCount / questions.length) * 100), mode, answers });
   };
-
-  useEffect(() => {
-    if (mode !== QuizMode.TIME_RUSH || isAnswered) return;
-    setTimeLeft(20);
-    const timer = setInterval(() => {
-      setTimeLeft(prev => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          handleAnswer(-1, false);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [currentIndex, mode, isAnswered]);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -210,7 +251,7 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
                     <X size={20} strokeWidth={2.5} />
                 </button>
                 {/* PREVIOUS BUTTON MOVED HERE */}
-                {currentIndex > 0 && (
+                {currentIndex > 0 && (!isMultiplayer || isHost) && (
                     <button 
                         onClick={handlePrev}
                         title="Previous (Space / Arrow Left)"
@@ -341,6 +382,84 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
             </AnimatePresence>
         </div>
 
+        {/* MINI LEADERBOARD (MULTIPLAYER ONLY) */}
+        {isMultiplayer && multiplayerScores.length > 0 && (
+            <>
+                {/* Desktop Leaderboard */}
+                <div className="absolute right-6 top-24 z-20 hidden lg:block">
+                    <div className="bg-white/80 backdrop-blur-md border border-slate-200 shadow-lg rounded-2xl p-4 w-56">
+                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3 flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <Trophy size={14} className="text-amber-500" /> Live Rank
+                            </div>
+                            <span className="bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-md text-[10px]">
+                                {multiplayerScores.filter(p => p.is_online).length} Online
+                            </span>
+                        </h3>
+                        <div className="space-y-2">
+                            <AnimatePresence>
+                                {multiplayerScores.slice(0, 5).map((player, idx) => (
+                                    <motion.div 
+                                        key={player.id} 
+                                        layout
+                                        initial={{ opacity: 0, y: 10 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0, scale: 0.9 }}
+                                        className={`flex items-center justify-between text-sm p-2 rounded-xl transition-colors ${player.id === playerId ? 'bg-indigo-50 font-bold text-indigo-600 border border-indigo-100' : 'text-slate-600'}`}
+                                    >
+                                        <div className="flex items-center gap-2 truncate">
+                                            <span className={`text-xs w-4 text-center ${idx === 0 ? 'text-amber-500 font-black' : idx === 1 ? 'text-slate-400 font-black' : idx === 2 ? 'text-amber-700 font-black' : 'opacity-50'}`}>{idx + 1}.</span>
+                                            <span className="truncate">{player.name}</span>
+                                        </div>
+                                        <span className="font-mono text-xs bg-white px-1.5 py-0.5 rounded shadow-sm">{player.score}</span>
+                                    </motion.div>
+                                ))}
+                            </AnimatePresence>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Mobile Leaderboard Toggle */}
+                <div className="absolute right-4 top-20 z-20 lg:hidden">
+                    <button 
+                        onClick={() => setShowMobileLeaderboard(!showMobileLeaderboard)}
+                        className="flex items-center gap-2 bg-white/90 backdrop-blur-md border border-slate-200 shadow-lg rounded-full px-3 py-2 text-xs font-bold text-slate-600"
+                    >
+                        <Trophy size={14} className="text-amber-500" />
+                        <span>Rank</span>
+                        {showMobileLeaderboard ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    </button>
+
+                    <AnimatePresence>
+                        {showMobileLeaderboard && (
+                            <motion.div 
+                                initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                                animate={{ opacity: 1, y: 0, scale: 1 }}
+                                exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                                className="absolute right-0 top-full mt-2 bg-white/95 backdrop-blur-md border border-slate-200 shadow-xl rounded-2xl p-3 w-48"
+                            >
+                                <div className="space-y-1.5">
+                                    {multiplayerScores.slice(0, 5).map((player, idx) => (
+                                        <motion.div 
+                                            key={player.id} 
+                                            layout
+                                            className={`flex items-center justify-between text-xs p-1.5 rounded-lg ${player.id === playerId ? 'bg-indigo-50 font-bold text-indigo-600' : 'text-slate-600'}`}
+                                        >
+                                            <div className="flex items-center gap-1.5 truncate">
+                                                <span className={`w-3 text-center ${idx === 0 ? 'text-amber-500 font-black' : 'opacity-50'}`}>{idx + 1}.</span>
+                                                <span className="truncate">{player.name}</span>
+                                            </div>
+                                            <span className="font-mono">{player.score}</span>
+                                        </motion.div>
+                                    ))}
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+                </div>
+            </>
+        )}
+
         {/* --- MAIN CARD --- */}
         <div className="flex-1 w-full flex items-center justify-center px-4 pb-12 pt-16 relative z-10">
             <AnimatePresence mode='wait'>
@@ -350,7 +469,7 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ questions, mode, o
                     isAnswered={isAnswered}
                     userAnswer={userAnswer}
                     onAnswer={handleAnswer}
-                    onNext={handleNext}
+                    onNext={(!isMultiplayer || isHost) ? handleNext : undefined}
                 />
             </AnimatePresence>
         </div>

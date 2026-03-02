@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Key, Save, Trash2, ShieldCheck, Zap, Cpu, Database, HardDrive, Server, Layers, HelpCircle, CheckCircle2, Copy, Palette, LogOut, CreditCard, ShieldAlert, Wrench, Hand } from 'lucide-react';
+import { Key, Save, Trash2, ShieldCheck, Zap, Cpu, Database, HardDrive, Server, Layers, HelpCircle, CheckCircle2, Copy, Palette, LogOut, CreditCard, ShieldAlert, Wrench, Hand, ArrowRight, PlayCircle, X, Unlock, User } from 'lucide-react';
 import { saveApiKey, getApiKey, removeApiKey, saveStorageConfig, getStorageProvider, getSupabaseConfig, saveGestureEnabled, getGestureEnabled } from '../services/storageService';
 import { MikirCloud, SUPABASE_SCHEMA_SQL } from '../services/supabaseService'; 
 import { setSRSEnabled, isSRSEnabled } from '../services/srsService';
@@ -12,6 +12,9 @@ import { GlassButton } from './GlassButton';
 import { ThemeSelector } from './ThemeSelector';
 import { AiProvider, StorageProvider } from '../types';
 import { AdminGenerator } from './AdminGenerator';
+import { LoginGate } from './LoginGate';
+import { AuthWidget } from './AuthWidget';
+import { SQLEditor } from './SQLEditor';
 
 const DEFAULT_ADMIN_PASS = "mikir123";
 
@@ -21,14 +24,13 @@ export const SettingsScreen: React.FC = () => {
   const [groqKey, setGroqKey] = useState('');
   const [isGeminiSaved, setIsGeminiSaved] = useState(false);
   const [isGroqSaved, setIsGroqSaved] = useState(false);
-  const [storageTab, setStorageTab] = useState<'ai' | 'storage' | 'appearance' | 'features'>('ai');
+  const [storageTab, setStorageTab] = useState<'ai' | 'storage' | 'account' | 'appearance' | 'features'>('ai');
   const [storageProvider, setStorageProvider] = useState<StorageProvider>('local');
   const [supabaseUrl, setSupabaseUrl] = useState('');
   const [supabaseKey, setSupabaseKey] = useState('');
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'success' | 'error'>('idle');
-  const [showGuide, setShowGuide] = useState(false);
-  const [copiedSql, setCopiedSql] = useState(false);
+  const [showSQLEditor, setShowSQLEditor] = useState(false);
   const [srsEnabled, setSrsEnabledState] = useState(true);
   const [gestureEnabled, setGestureEnabled] = useState(false);
   const [currentTheme, setCurrentTheme] = useState(getSavedTheme());
@@ -39,6 +41,7 @@ export const SettingsScreen: React.FC = () => {
   const [showAdminAuth, setShowAdminAuth] = useState(false);
   const [adminPassInput, setAdminPassInput] = useState('');
   const [showAdminTool, setShowAdminTool] = useState(false);
+  const [showLoginGate, setShowLoginGate] = useState(false);
 
   useEffect(() => {
     requestKaomojiPermission();
@@ -52,6 +55,12 @@ export const SettingsScreen: React.FC = () => {
     setSrsEnabledState(isSRSEnabled());
     setGestureEnabled(getGestureEnabled());
     setSessionMetadata(getKeycardSession());
+
+    const handleKeycardChange = () => {
+      setSessionMetadata(getKeycardSession());
+    };
+    window.addEventListener('keycard_changed', handleKeycardChange);
+    return () => window.removeEventListener('keycard_changed', handleKeycardChange);
   }, []);
 
   const handleSaveKeys = () => {
@@ -88,7 +97,7 @@ export const SettingsScreen: React.FC = () => {
          if (result.schemaMissing) {
             alert("Koneksi OK, tapi Tabel belum ada. Jalankan SQL Schema!"); 
             setConnectionStatus('success'); 
-            setShowGuide(true);
+            setShowSQLEditor(true);
          } else {
             setConnectionStatus('success'); 
             notifySupabaseSuccess(); 
@@ -115,7 +124,6 @@ export const SettingsScreen: React.FC = () => {
     }
   };
 
-  const handleCopySql = () => { navigator.clipboard.writeText(SUPABASE_SCHEMA_SQL); setCopiedSql(true); setTimeout(() => setCopiedSql(false), 2000); };
   const toggleSRS = () => { const newState = !srsEnabled; setSrsEnabledState(newState); setSRSEnabled(newState); };
   const toggleGesture = () => { const newState = !gestureEnabled; setGestureEnabled(newState); saveGestureEnabled(newState); };
 
@@ -141,18 +149,17 @@ export const SettingsScreen: React.FC = () => {
   return (
     <div className="max-w-2xl mx-auto pt-8 pb-32 px-4 text-theme-text relative">
       
-      {/* ADMIN AUTH MODAL */}
+      {/* LOGIN GATE MODAL */}
       <AnimatePresence>
-        {showAdminAuth && (
-            <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
-                <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} className="bg-white rounded-2xl p-6 shadow-2xl max-w-sm w-full">
-                    <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center"><ShieldAlert className="mr-2 text-rose-500"/> Admin Verification</h3>
-                    <input type="password" autoFocus placeholder="Enter Admin PIN" value={adminPassInput} onChange={e => setAdminPassInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && verifyAdmin()} className="w-full border border-slate-300 rounded-xl px-4 py-3 mb-4 focus:ring-2 focus:ring-indigo-500 outline-none text-slate-800 bg-white" />
-                    <div className="flex justify-end gap-2">
-                        <button onClick={() => setShowAdminAuth(false)} className="px-4 py-2 text-slate-500 text-sm">Cancel</button>
-                        <button onClick={verifyAdmin} className="px-4 py-2 bg-slate-900 text-white rounded-xl text-sm font-bold">Access</button>
-                    </div>
-                </motion.div>
+        {showLoginGate && (
+            <div className="fixed inset-0 z-50 bg-slate-900/95 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="relative w-full max-w-md">
+                    <button onClick={() => setShowLoginGate(false)} className="absolute -top-12 right-0 p-2 text-white/50 hover:text-white"><X size={24} /></button>
+                    <LoginGate onUnlock={() => {
+                        setShowLoginGate(false);
+                        setSessionMetadata(getKeycardSession());
+                    }} />
+                </div>
             </div>
         )}
       </AnimatePresence>
@@ -171,7 +178,7 @@ export const SettingsScreen: React.FC = () => {
       )}
 
       <div className="flex space-x-2 md:space-x-4 mb-8 justify-center overflow-x-auto pb-2 scrollbar-hide">
-         {['ai', 'storage', 'appearance', 'features'].map(tab => (
+         {['ai', 'storage', 'account', 'appearance', 'features'].map(tab => (
            <button key={tab} onClick={() => setStorageTab(tab as any)} className={`px-6 py-2 rounded-full font-medium transition-all whitespace-nowrap capitalize ${storageTab === tab ? tabActive : tabInactive}`}>{tab}</button>
          ))}
       </div>
@@ -190,8 +197,53 @@ export const SettingsScreen: React.FC = () => {
                 </div>
                 <div className="space-y-6">
                 <div>
-                    <label className="block text-sm font-medium mb-2 text-theme-text">{activeTab === 'gemini' ? 'Google Gemini Key' : 'Groq API Key'}</label>
+                    <div className="flex justify-between items-end mb-2">
+                       <label className="block text-sm font-medium text-theme-text">{activeTab === 'gemini' ? 'Google Gemini Key' : 'Groq API Key'}</label>
+                       <a 
+                         href={activeTab === 'gemini' ? 'https://aistudio.google.com/app/apikey' : 'https://console.groq.com/keys'} 
+                         target="_blank" 
+                         rel="noopener noreferrer"
+                         className="text-xs font-bold text-indigo-500 hover:text-indigo-600 flex items-center bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-md transition-colors"
+                       >
+                         Dapatkan Key <ArrowRight size={12} className="ml-1" />
+                       </a>
+                    </div>
                     <input type="password" value={activeTab === 'gemini' ? geminiKey : groqKey} onChange={(e) => activeTab === 'gemini' ? setGeminiKey(e.target.value) : setGroqKey(e.target.value)} placeholder="Paste Key here..." className={inputStyle} />
+                    
+                    {/* Expandable Tutorial */}
+                    <details className="mt-3 group bg-theme-glass border border-theme-border rounded-xl overflow-hidden">
+                       <summary className="p-3 flex items-center cursor-pointer list-none hover:bg-theme-bg/50 transition-colors">
+                           <div className="p-1.5 bg-theme-primary/10 rounded-md mr-3 shrink-0 group-open:bg-theme-primary/20 transition-colors">
+                              <PlayCircle size={16} className="text-theme-primary" />
+                           </div>
+                           <div className="flex-1">
+                              <p className="text-xs font-bold text-theme-text">Tutorial: Cara mendapatkan {activeTab === 'gemini' ? 'Gemini' : 'Groq'} API Key</p>
+                              <p className="text-[10px] text-theme-muted mt-0.5 group-open:hidden">Klik untuk melihat langkah-langkah</p>
+                           </div>
+                       </summary>
+                       <div className="p-4 pt-0 text-xs text-theme-muted border-t border-theme-border bg-theme-bg/30">
+                           {activeTab === 'gemini' ? (
+                               <ol className="list-decimal ml-4 space-y-2 mt-3">
+                                   <li>Buka <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-theme-primary font-bold hover:underline">Google AI Studio</a>.</li>
+                                   <li>Login menggunakan akun Google Anda.</li>
+                                   <li>Klik tombol <b>"Create API key"</b>.</li>
+                                   <li>Pilih <b>"Create API key in new project"</b>.</li>
+                                   <li>Tunggu beberapa saat, lalu <b>Copy</b> API Key yang muncul.</li>
+                                   <li>Paste API Key tersebut ke dalam kotak di atas.</li>
+                               </ol>
+                           ) : (
+                               <ol className="list-decimal ml-4 space-y-2 mt-3">
+                                   <li>Buka <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" className="text-orange-500 font-bold hover:underline">Groq Cloud Console</a>.</li>
+                                   <li>Login menggunakan akun Google atau GitHub Anda.</li>
+                                   <li>Klik tombol <b>"Create API Key"</b>.</li>
+                                   <li>Masukkan nama untuk API Key Anda (misal: "test").</li>
+                                   <li>Klik <b>"Submit"</b>.</li>
+                                   <li><b>Copy</b> API Key yang muncul (dimulai dengan <code>gsk_</code>).</li>
+                                   <li>Paste API Key tersebut ke dalam kotak di atas.</li>
+                               </ol>
+                           )}
+                       </div>
+                    </details>
                 </div>
                 <div className="flex space-x-3 pt-4 border-t border-theme-border">
                     <GlassButton onClick={handleSaveKeys} className="flex-1 flex items-center justify-center"><Save size={18} className="mr-2" /> Simpan Key</GlassButton>
@@ -226,24 +278,28 @@ export const SettingsScreen: React.FC = () => {
                    <GlassButton onClick={handleSaveStorage} className="flex-[2] flex items-center justify-center"><Save size={18} className="mr-2" /> Simpan</GlassButton>
                 </div>
                 <div className="mt-8 border-t border-theme-border pt-6">
-                  <button onClick={() => setShowGuide(!showGuide)} className="flex items-center w-full text-sm font-bold text-theme-primary hover:underline"><HelpCircle size={16} className="mr-2" /> {showGuide ? "Tutup Cheat Sheet" : "SQL Cheat Sheet (Nuclear)"}</button>
-                  <AnimatePresence>
-                     {showGuide && (
-                        <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="overflow-hidden">
-                           <div className="bg-theme-glass border border-theme-border rounded-xl p-5 mt-4 text-sm opacity-80 space-y-4">
-                              <p className="font-bold">SETUP DATABASE (SQL Editor):</p>
-                              <div className="relative group">
-                                 <pre className="bg-slate-900 text-slate-300 p-4 rounded-xl text-xs overflow-x-auto font-mono border border-slate-700">{SUPABASE_SCHEMA_SQL}</pre>
-                                 <button onClick={handleCopySql} className="absolute top-2 right-2 p-2 bg-white/10 text-white rounded hover:bg-white/20">{copiedSql ? <CheckCircle2 size={14} /> : <Copy size={14} />}</button>
-                              </div>
-                           </div>
-                        </motion.div>
-                     )}
-                  </AnimatePresence>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-sm font-bold text-theme-text">Database Manager</h3>
+                      <p className="text-xs text-theme-muted">Lihat Schema SQL & Data Inspector.</p>
+                    </div>
+                    <button 
+                      onClick={() => setShowSQLEditor(true)} 
+                      className="flex items-center px-4 py-2 bg-theme-primary/10 hover:bg-theme-primary/20 text-theme-primary text-xs font-bold rounded-lg transition-all border border-theme-primary/20"
+                    >
+                      <Database size={16} className="mr-2" /> Open SQL Editor
+                    </button>
+                  </div>
                 </div>
               </motion.div>
             )}
           </>
+        )}
+
+        {showSQLEditor && <SQLEditor config={{ url: supabaseUrl, key: supabaseKey }} onClose={() => setShowSQLEditor(false)} />}
+
+        {storageTab === 'account' && (
+          <AuthWidget />
         )}
 
         {storageTab === 'appearance' && (
@@ -273,8 +329,9 @@ export const SettingsScreen: React.FC = () => {
         )}
       </motion.div>
 
-      <div className="mt-12 text-center">
-         <button onClick={() => setShowAdminAuth(true)} className="inline-flex items-center px-4 py-2 rounded-full text-xs font-bold text-theme-muted opacity-40 hover:opacity-100 hover:bg-theme-glass transition-all"><Wrench size={12} className="mr-2" /> Admin Console</button>
+      <div className="mt-12 flex flex-col sm:flex-row items-center justify-center gap-4">
+         <button onClick={() => setShowLoginGate(true)} className="inline-flex items-center px-6 py-3 rounded-xl text-sm font-bold bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-all"><Unlock size={16} className="mr-2" /> Load Keycard</button>
+         <button onClick={() => setShowAdminTool(true)} className="inline-flex items-center px-6 py-3 rounded-xl text-sm font-bold bg-theme-glass border border-theme-border text-theme-muted hover:text-theme-text transition-all"><CreditCard size={16} className="mr-2" /> Create / Edit Keycard</button>
       </div>
     </div>
   );

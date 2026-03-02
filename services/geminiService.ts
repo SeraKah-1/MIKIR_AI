@@ -7,6 +7,7 @@
 
 import { GoogleGenAI } from "@google/genai";
 import { Question, QuizMode, ExamStyle } from "../types";
+import { processFilesToContext } from "./fileService";
 
 // --- CONFIGURATION ---
 
@@ -23,16 +24,40 @@ const INGESTION_MODELS = [
 const DEFAULT_GENERATION_MODEL = 'gemini-3-flash-preview';
 
 const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: string; mimeType: string } } | { text: string }> => {
+  // SAFETY: Limit individual file size to 10MB to prevent browser crash
+  if (file.size > 10 * 1024 * 1024) {
+    throw new Error(`File ${file.name} terlalu besar (>10MB). Harap gunakan file yang lebih kecil.`);
+  }
+
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
+    
     // Simple text files
     if (file.type === "text/markdown" || file.type === "text/plain" || file.name.endsWith('.md') || file.name.endsWith('.txt')) {
-      reader.onloadend = () => resolve({ text: reader.result as string });
+      reader.onload = () => {
+        const result = reader.result as string;
+        resolve({ text: result });
+      };
       reader.readAsText(file);
     } else {
-      // PDF / Images
-      reader.onloadend = () => {
-        const base64Data = (reader.result as string).split(',')[1];
+      // PDF / Images - Use ArrayBuffer for better memory management than DataURL
+      reader.onload = () => {
+        const arrayBuffer = reader.result as ArrayBuffer;
+        const bytes = new Uint8Array(arrayBuffer);
+        
+        // Convert to base64 in chunks to avoid "Maximum call stack size exceeded" and high memory spikes
+        let binary = '';
+        const len = bytes.byteLength;
+        const chunkSize = 8192;
+        
+        for (let i = 0; i < len; i += chunkSize) {
+          const chunk = bytes.subarray(i, Math.min(i + chunkSize, len));
+          // @ts-ignore
+          binary += String.fromCharCode.apply(null, chunk);
+        }
+        
+        const base64Data = btoa(binary);
+        
         resolve({
           inlineData: {
             data: base64Data,
@@ -40,64 +65,64 @@ const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: s
           },
         });
       };
-      reader.readAsDataURL(file);
+      reader.readAsArrayBuffer(file);
     }
-    reader.onerror = reject;
+    reader.onerror = (err) => {
+      console.error("FileReader Error:", err);
+      reject(new Error(`Gagal membaca file ${file.name}`));
+    };
   });
 };
 
 const cleanAndParseJSON = (rawText: string): any[] => {
+  if (!rawText) return [];
+
   // 1. Remove <thinking> tags (Crucial for Gemini 2.0/3.0 Thinking models)
-  let text = rawText.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "").trim();
+  let text = rawText;
+  if (text && text.includes("<thinking>")) {
+    // Use a more robust regex that handles nested tags if any
+    text = text.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "").trim();
+  }
 
-  // 2. Cleanup Markdown
-  text = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+  // 2. Cleanup Markdown blocks
+  if (text) {
+    text = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+  }
 
-  // 3. Robust Extraction Strategy for Library Context
-  // Sometimes AI adds text BEFORE the JSON array like "Based on the provided library... here is the JSON: ["
+  // 3. Find the first '[' and last ']'
   const firstOpen = text.indexOf('[');
-  let lastClose = text.lastIndexOf(']');
+  const lastClose = text.lastIndexOf(']');
 
-  // 4. Fallback: If no array found, check if it's wrapped in an object or just garbage text
   if (firstOpen === -1) {
+      // Fallback: Check if it's a single object or wrapped in an object
       const firstBrace = text.indexOf('{');
       const lastBrace = text.lastIndexOf('}');
       if (firstBrace !== -1 && lastBrace !== -1) {
           try {
               const potentialObj = JSON.parse(text.substring(firstBrace, lastBrace + 1));
-              // Try to find an array value inside the object
+              // If it's an object with a questions array
+              if (potentialObj.questions && Array.isArray(potentialObj.questions)) return potentialObj.questions;
+              // If it's an object with any array
               for (const key in potentialObj) {
                   if (Array.isArray(potentialObj[key])) return potentialObj[key];
               }
-              // If the object itself is a single question (rare), wrap it
+              // If it's just a single question object
               if (potentialObj.text && potentialObj.options) return [potentialObj];
           } catch(e) { /* ignore */ }
       }
-      throw new Error("Format JSON invalid (Tidak ditemukan Array '['). AI mungkin menolak topik.");
+      throw new Error("AI memberikan format yang tidak dikenali. Harap coba lagi.");
   }
 
-  // 5. Robust Truncation Fix: If ']' is missing, assume truncation
+  // 4. Extract the array part
   let jsonContent = "";
   if (lastClose === -1 || lastClose < firstOpen) {
-      // The output is likely truncated.
+      // Handle truncated JSON (common in large generations)
       const contentSoFar = text.substring(firstOpen);
-      
-      // Attempt 1: Find the last "}," which signifies the end of a complete object in a list.
-      const lastCommaBrace = contentSoFar.lastIndexOf('},');
-      
-      if (lastCommaBrace !== -1) {
-          // Cut off everything after the last complete object and close the array.
-          jsonContent = contentSoFar.substring(0, lastCommaBrace + 1) + ']';
+      const lastBrace = contentSoFar.lastIndexOf('}');
+      if (lastBrace !== -1) {
+          jsonContent = contentSoFar.substring(0, lastBrace + 1) + ']';
       } else {
-          // Attempt 2: Maybe only one object exists and it's complete, just missing the array close?
-          const lastBrace = contentSoFar.lastIndexOf('}');
-          if (lastBrace !== -1) {
-              jsonContent = contentSoFar.substring(0, lastBrace + 1) + ']';
-          } else {
-              // Attempt 3: No complete objects found. Return empty to trigger retry logic upstream if needed.
-              console.warn("JSON Truncated with no complete objects found.");
-              return [];
-          }
+          return [];
       }
   } else {
       jsonContent = text.substring(firstOpen, lastClose + 1);
@@ -106,13 +131,16 @@ const cleanAndParseJSON = (rawText: string): any[] => {
   try {
     return JSON.parse(jsonContent);
   } catch (e) {
-    // 6. Last Resort Repair: Remove trailing commas (e.g. [ {...}, ] )
+    // 5. Repair trailing commas and common AI JSON errors
     try {
-        const fixedContent = jsonContent.replace(/,\s*([\]}])/g, '$1');
+        const fixedContent = jsonContent
+          .replace(/,\s*([\]}])/g, '$1') // Trailing commas
+          .replace(/\\n/g, " ") // Newlines in strings
+          .replace(/\n/g, " "); // Actual newlines
         return JSON.parse(fixedContent);
     } catch (e2) {
-        console.error("JSON Parse Fail. Raw:", rawText);
-        throw new Error("Gagal parsing output AI. Struktur JSON rusak.");
+        console.error("JSON Parse Fail:", e2, "Content snippet:", jsonContent.substring(0, 100));
+        throw new Error("Gagal memproses data kuis. Struktur data dari AI rusak.");
     }
   }
 };
@@ -147,6 +175,7 @@ const sanitizeQuestion = (q: any): Omit<Question, 'id'> => {
     options: options,
     correctIndex: newCorrectIndex,
     explanation: String(q.explanation || "Pembahasan tidak tersedia."),
+    hint: String(q.hint || "Coba ingat kembali konsep utamanya."),
     keyPoint: String(q.keyPoint || "Umum").substring(0, 20),
     difficulty: "Medium"
   };
@@ -228,28 +257,25 @@ export const generateQuiz = async (
   const parts: any[] = [];
   let contextText = ""; 
 
-  // 1. Handle Library Context (Ini adalah Smart Cache dari Supabase/Local)
+  // 1. Handle Library Context
   if (libraryContext) {
-     onProgress("Memuat Smart Cache (Hemat Token)...");
-     // Clearly separate Library content
-     parts.push({ text: `LIBRARY MATERIAL:\n${libraryContext.substring(0, 100000)}\n\nEND OF LIBRARY MATERIAL` }); 
+     onProgress("Memuat Smart Cache...");
+     parts.push({ text: `LIBRARY MATERIAL:\n${libraryContext.substring(0, 500000)}\n\nEND OF LIBRARY MATERIAL` }); 
      contextText = "[Library Source]";
   }
 
-  // 2. Handle File Uploads (Binary/Text)
+  // 2. Handle File Uploads (Universal Extraction)
   const fileArray = Array.isArray(files) ? files : (files ? [files] : []);
   if (fileArray.length > 0) {
-    onProgress(`Memproses ${fileArray.length} File Tambahan...`);
-    for (const file of fileArray) {
-       const filePart = await fileToGenerativePart(file);
-       parts.push(filePart);
-    }
+    const extractedText = await processFilesToContext(fileArray, onProgress);
+    parts.push({ text: `DOCUMENT CONTENT:\n${extractedText.substring(0, 1000000)}\n\nEND OF DOCUMENT CONTENT` });
     contextText += ` [Files: ${fileArray.map(f => f.name).join(', ')}]`; 
   } 
   
   // 3. Topic Focus
   if (topic) {
-    parts.push({ text: `IMPORTANT: FOCUS ONLY ON THIS TOPIC: "${topic}". Ignore unrelated parts.` });
+    parts.push({ text: `IMPORTANT: FOCUS ONLY ON THIS TOPIC: "${topic}".` });
+    if (!contextText) contextText = topic;
   }
 
   let avoidancePrompt = "";
@@ -288,6 +314,8 @@ export const generateQuiz = async (
         **Analisis Miskonsepsi:**
         - [Why distractor 1 is wrong]
         - [Why distractor 2 is wrong]"
+    5. SOCRATIC HINT:
+       Provide a 'hint' that guides the user to the answer without giving it away directly.
 
     OUTPUT FORMAT (Strict JSON Array, NO intro text, NO markdown formatting outside the JSON):
     [
@@ -296,6 +324,7 @@ export const generateQuiz = async (
         "options": ["Correct Answer", "Distractor 1", "Distractor 2", "Distractor 3"],
         "correctIndex": 0,
         "explanation": "**Jawaban Benar:** ... \n\n **Analisis Miskonsepsi:** ...",
+        "hint": "Socratic hint to help the user...",
         "keyPoint": "Tag (Concept)"
       }
     ]
@@ -326,9 +355,13 @@ export const generateQuiz = async (
       try {
          response = await tryGenerate(selectedModel);
       } catch (err: any) {
-         if (err.message.includes("404") || err.message.includes("not found")) {
+         // Handle Free Tier Limits (429) or Model Not Found (404)
+         if (err.message.includes("429")) {
+             onProgress("Limit API Pro tercapai, mencoba model Flash (Free Tier)...");
+             response = await tryGenerate("gemini-3-flash-preview");
+         } else if (err.message.includes("404") || err.message.includes("not found")) {
              console.warn(`Model ${selectedModel} not found, falling back to stable.`);
-             onProgress("Model Experimental sibuk/404, menggunakan model Stabil...");
+             onProgress("Model tidak ditemukan, menggunakan model Stabil...");
              response = await tryGenerate("gemini-2.5-flash");
          } else {
              throw err;
@@ -368,5 +401,72 @@ export const generateQuiz = async (
 };
 
 export const chatWithDocument = async (apiKey: string, modelId: string, history: any[], message: string, contextText: string, file: File | null) => {
-  return "Fitur chat sedang dalam perbaikan."; 
+  if (!apiKey) throw new Error("API Key Gemini belum diatur.");
+  const ai = new GoogleGenAI({ apiKey: apiKey });
+
+  const parts: any[] = [];
+
+  if (contextText) {
+    parts.push({ text: `CONTEXT MATERIAL:\n${contextText.substring(0, 100000)}\n\nEND OF CONTEXT MATERIAL` });
+  }
+
+  if (file) {
+    const filePart = await fileToGenerativePart(file);
+    parts.push(filePart);
+  }
+
+  parts.push({ text: `USER MESSAGE: ${message}` });
+
+  const systemInstruction = `
+    ROLE: Expert Tutor and Assistant.
+    TASK: Answer the user's question based ONLY on the provided CONTEXT MATERIAL or FILE.
+    If the answer is not in the context, politely inform the user that the information is not available in the provided material.
+    Be concise, helpful, and use markdown for formatting.
+  `;
+
+  try {
+    const chat = ai.chats.create({
+      model: modelId || 'gemini-2.5-flash',
+      config: {
+        systemInstruction: systemInstruction,
+        temperature: 0.3,
+      }
+    });
+
+    // We need to send the history first if it's not empty, but the SDK's chat doesn't easily take history in `create` without specific format.
+    // Instead of using `ai.chats.create` with history, we can just use `generateContent` with the history appended.
+    
+    const formattedHistory = history.map(h => {
+      return `${h.role === 'user' ? 'USER' : 'ASSISTANT'}: ${h.parts[0].text}`;
+    }).join('\n\n');
+
+    const prompt = `
+      ${systemInstruction}
+
+      ${parts.map(p => p.text ? p.text : '').join('\n')}
+
+      CHAT HISTORY:
+      ${formattedHistory}
+
+      ASSISTANT:
+    `;
+
+    // If there's a file part (inlineData), we need to pass it properly
+    const finalParts = [];
+    if (file) {
+      const filePart = await fileToGenerativePart(file);
+      finalParts.push(filePart);
+    }
+    finalParts.push({ text: prompt });
+
+    const response = await ai.models.generateContent({
+      model: modelId || 'gemini-2.5-flash',
+      contents: { parts: finalParts }
+    });
+
+    return response.text || "Maaf, saya tidak bisa memberikan jawaban saat ini.";
+  } catch (err: any) {
+    console.error("Chat Error:", err);
+    throw new Error("Gagal memproses pesan. Periksa koneksi atau API Key.");
+  }
 };
