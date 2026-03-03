@@ -21,7 +21,6 @@ interface ConfigScreenProps {
 
 const MODE_CARDS = [
   { id: QuizMode.STANDARD, icon: Layout, label: "Standard", desc: "Santai. Tanpa waktu.", color: "bg-indigo-50 border-indigo-200 text-indigo-600" },
-  { id: QuizMode.TIME_RUSH, icon: Zap, label: "Time Rush", desc: "20 detik/soal.", color: "bg-amber-50 border-amber-200 text-amber-600" },
   { id: QuizMode.SURVIVAL, icon: Skull, label: "Survival", desc: "3 Nyawa.", color: "bg-rose-50 border-rose-200 text-rose-600" }
 ];
 

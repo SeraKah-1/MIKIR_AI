@@ -102,9 +102,6 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ onComplete, onExit
       setFlashType('success');
       
       scoreDelta = 10;
-      if (mode === QuizMode.TIME_RUSH) {
-         scoreDelta += timeLeftRef.current;
-      }
       
       const nextStreak = streak + 1;
       if (nextStreak >= 3) {
@@ -349,11 +346,6 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({ onComplete, onExit
                 {mode === QuizMode.SURVIVAL && (
                     <div className={`flex items-center font-black px-3 py-1.5 rounded-xl text-xs border ${lives === 1 ? 'bg-rose-500 text-white border-rose-600' : 'bg-white text-rose-500 border-rose-100 shadow-sm'}`}>
                         <Heart size={14} className={`mr-1.5 ${lives === 1 ? 'fill-white' : 'fill-rose-500'}`} /> {lives}
-                    </div>
-                )}
-                {mode === QuizMode.TIME_RUSH && (
-                    <div className={`flex items-center font-mono font-bold px-3 py-1.5 rounded-xl text-xs border ${timeLeft <= 5 ? 'bg-rose-500 text-white border-rose-600' : 'bg-white text-slate-600 border-slate-200 shadow-sm'}`}>
-                        <Clock size={14} className="mr-1.5" /> {timeLeft}s
                     </div>
                 )}
             </div>

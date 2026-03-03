@@ -233,7 +233,7 @@ export const UniversalQuestionCard: React.FC<UniversalCardProps> = ({
                   className="text-sm font-bold text-indigo-500 hover:text-indigo-600 flex items-center gap-2 transition-colors"
                >
                   <span className="bg-indigo-100 p-1.5 rounded-lg"><Lightbulb size={14} /></span>
-                  {showHint ? "Sembunyikan Petunjuk" : "Tampilkan Petunjuk Socratic"}
+                  {showHint ? "Sembunyikan Petunjuk" : "Tampilkan Petunjuk"}
                </button>
                
                <AnimatePresence>

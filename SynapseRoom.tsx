@@ -92,7 +92,7 @@ export const SynapseRoom: React.FC<SynapseRoomProps> = ({ onExit }) => {
                         SYNAPSE
                     </h1>
                     <div className="inline-block px-4 py-1 bg-cyan-500 text-black font-bold tracking-widest transform -skew-x-12">
-                        VIRTUAL ROOM: ARCADE
+                        VIRTUAL ROOM: SYNAPSE
                     </div>
                 </motion.div>
 

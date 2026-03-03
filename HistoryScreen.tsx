@@ -24,7 +24,6 @@ interface HistoryScreenProps {
 const getModeBadge = (mode: string) => {
   switch(mode) {
     case QuizMode.SURVIVAL: return { icon: Skull, label: 'Survival', color: 'bg-rose-100 text-rose-600 border-rose-200' };
-    case QuizMode.TIME_RUSH: return { icon: Zap, label: 'Time Rush', color: 'bg-amber-100 text-amber-600 border-amber-200' };
     case QuizMode.SCAFFOLDING: return { icon: TrendingUp, label: 'Bertahap', color: 'bg-blue-100 text-blue-600 border-blue-200' };
     default: return { icon: Layout, label: 'Standard', color: 'bg-indigo-50 text-indigo-600 border-indigo-200' };
   }

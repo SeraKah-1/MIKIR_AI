@@ -268,6 +268,8 @@ export const generateQuiz = async (
     ? `COGNITIVE LEVELS (Mix these types): ${examStyles.join(', ')}`
     : `COGNITIVE LEVEL: ${ExamStyle.C2_CONCEPT}`;
 
+  const modeInstruction = "";
+
   // --- BATCHING STRATEGY (PARALLEL) ---
   // Tetap menggunakan parallel batching karena ini murni untuk kecepatan, bukan "subsidi".
   // Tapi logikanya disederhanakan: 1 Model, 1 Cara.
@@ -309,6 +311,7 @@ export const generateQuiz = async (
         GOAL: Create ${count} multiple-choice questions for: "${topic || 'Context'}".
         
         ${bloomInstruction}
+        ${modeInstruction}
         USER NOTE: "${customPrompt}"
     
         INSTRUCTIONS:

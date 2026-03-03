@@ -12,11 +12,9 @@ export const Navigation: React.FC<NavigationProps> = ({ currentView, onChangeVie
   const tabs = [
     { id: AppView.GENERATOR, icon: Home, label: 'Home' },
     { id: AppView.NEURO_SYNC, icon: Brain, label: 'Sync' },
-    { id: AppView.SYNAPSE_BEAT, icon: Zap, label: 'Arcade' },
-    { id: AppView.VIRTUAL_ROOM, icon: Gamepad2, label: 'Mixer' },
     { id: AppView.MULTIPLAYER, icon: Users, label: 'Lobby' },
     { id: AppView.WORKSPACE, icon: FolderOpen, label: 'Files' },
-    // { id: AppView.SETTINGS, icon: Settings, label: 'Settings' }, // Hidden to save space if needed
+    { id: AppView.SETTINGS, icon: Settings, label: 'Settings' },
   ];
 
   return (

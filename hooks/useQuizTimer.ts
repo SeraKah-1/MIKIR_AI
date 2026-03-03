@@ -17,23 +17,8 @@ export const useQuizTimer = (
   }, [handleAnswer]);
 
   useEffect(() => {
-    if (mode !== QuizMode.TIME_RUSH || isAnswered) return;
-    setTimeLeft(20);
-    timeLeftRef.current = 20;
-    
-    const timer = setInterval(() => {
-      setTimeLeft(prev => {
-        const next = prev - 1;
-        timeLeftRef.current = next;
-        if (next <= 0) {
-          clearInterval(timer);
-          handleAnswerRef.current(-1, false);
-          return 0;
-        }
-        return next;
-      });
-    }, 1000);
-    return () => clearInterval(timer);
+    // Timer disabled for now as Time Rush mode is removed
+    return;
   }, [currentIndex, mode, isAnswered]);
 
   return { timeLeft, timeLeftRef, setTimeLeft };

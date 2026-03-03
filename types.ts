@@ -21,7 +21,6 @@ export enum AppView {
 export enum QuizMode {
   STANDARD = 'STANDARD',
   SCAFFOLDING = 'SCAFFOLDING', 
-  TIME_RUSH = 'TIME_RUSH',     
   SURVIVAL = 'SURVIVAL',
   CHALLENGE = 'CHALLENGE' // New Mode
 }
