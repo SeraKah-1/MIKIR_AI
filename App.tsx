@@ -29,6 +29,8 @@ import { useAppStore } from './store/useAppStore';
 
 import { useAutoSave } from './hooks/useAutoSave';
 
+import { SynapseRoom } from './components/SynapseRoom';
+
 const App: React.FC = () => {
   const {
     currentView, setCurrentView,
@@ -62,6 +64,17 @@ const App: React.FC = () => {
     };
     window.addEventListener('keycard_changed', handleKeycardChange);
     return () => window.removeEventListener('keycard_changed', handleKeycardChange);
+  }, []);
+
+  useEffect(() => {
+    const handleHashChange = () => {
+        if (window.location.hash === '#synapse') {
+            setCurrentView(AppView.SYNAPSE_BEAT);
+            window.location.hash = ''; // Reset hash
+        }
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
   const startQuizGeneration = async (files: File[] | null, config: ModelConfig) => {
@@ -514,6 +527,7 @@ const App: React.FC = () => {
               onDelete={activeQuizId ? handleDeleteActiveQuiz : undefined}
               onAddMore={lastConfig ? handleAddMoreQuestions : undefined}
               onRemix={handleRemix} 
+              onPlaySynapse={() => setCurrentView(AppView.SYNAPSE_BEAT)}
             />
         );
     }
@@ -536,6 +550,8 @@ const App: React.FC = () => {
       case AppView.VIRTUAL_ROOM: return <VirtualRoom onStartMix={handleStartMixer} />;
       case AppView.MULTIPLAYER: return <MultiplayerLobby onStartGame={handleStartMultiplayer} />;
       case AppView.NEURO_SYNC: return <NeuroSyncDashboard keycardId={sessionMetadata?.id} onExit={() => setCurrentView(AppView.GENERATOR)} />;
+      case AppView.SYNAPSE_BEAT: 
+        return <SynapseRoom onExit={() => setCurrentView(AppView.GENERATOR)} />;
       case AppView.GENERATOR: default: 
         return (
             <ConfigScreen 

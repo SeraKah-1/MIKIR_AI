@@ -403,9 +403,9 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
                     disabled={isLoadingModels || dynamicModels.filter(m => m.provider === provider).length === 0}
                     className="w-full appearance-none bg-white border border-slate-200 text-slate-700 font-bold text-sm rounded-xl px-4 py-2.5 pr-10 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 disabled:opacity-50"
                  >
-                    {dynamicModels.filter(m => m.provider === provider).length > 0 ? (
-                       dynamicModels.filter(m => m.provider === provider).map(m => (
-                          <option key={m.id} value={m.id}>{m.label}</option>
+                    {dynamicModels.filter(m => m && m.provider === provider).length > 0 ? (
+                       dynamicModels.filter(m => m && m.provider === provider).map(m => (
+                          <option key={m.id || "unknown"} value={m.id || ""}>{m.label || "Unknown Model"}</option>
                        ))
                     ) : (
                        <option value="">{getApiKey(provider) ? 'Gagal memuat model' : 'Masukkan API Key di Settings'}</option>
@@ -581,12 +581,12 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
                {inputMethod === 'library' ? `Generate dari ${selectedLibraryIds.length} Materi` : 'Mulai Magic'}
              </button>
              <button
-               disabled
-               className="btn-tactile flex-1 py-4 bg-white border-slate-200 text-slate-400 rounded-2xl font-bold text-sm shadow-sm flex items-center justify-center cursor-not-allowed"
-               title="Fitur Buat Soal Manual sedang dalam pengembangan"
+               onClick={() => window.location.hash = '#synapse'} // Temporary hack or use prop if available
+               className="btn-tactile flex-1 py-4 bg-white border-slate-200 text-slate-400 rounded-2xl font-bold text-sm shadow-sm flex items-center justify-center hover:bg-indigo-50 hover:text-indigo-500 hover:border-indigo-200 transition-all"
+               title="Experimental Rhythm Mode"
              >
-               <Type className="mr-2" size={18} />
-               Manual (Soon)
+               <Zap className="mr-2" size={18} />
+               Synapse (Beta)
              </button>
            </div>
         </div>

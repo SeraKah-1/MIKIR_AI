@@ -14,7 +14,8 @@ export enum AppView {
   SETTINGS = 'SETTINGS',
   VIRTUAL_ROOM = 'VIRTUAL_ROOM',
   MULTIPLAYER = 'MULTIPLAYER',
-  NEURO_SYNC = 'NEURO_SYNC'
+  NEURO_SYNC = 'NEURO_SYNC',
+  SYNAPSE_BEAT = 'SYNAPSE_BEAT' // New Mode
 }
 
 export enum QuizMode {

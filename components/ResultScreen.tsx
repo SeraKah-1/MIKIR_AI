@@ -18,6 +18,7 @@ interface ResultScreenProps {
   onDelete?: () => void;
   onAddMore?: (count: number) => void;
   onRemix?: (questions: Question[]) => void;
+  onPlaySynapse?: () => void; // New prop for direct navigation
 }
 
 const SkillBar: React.FC<{ label: string; score: number; icon: any; color: string }> = ({ label, score, icon: Icon, color }) => (
@@ -131,7 +132,7 @@ const CheatSheetModal: React.FC<{ questions: Question[]; onClose: () => void }> 
   );
 };
 
-export const ResultScreen: React.FC<ResultScreenProps> = ({ result, questions, onReset, onRetryMistakes, onRetryAll, onDelete, onAddMore, onRemix }) => {
+export const ResultScreen: React.FC<ResultScreenProps> = ({ result, questions, onReset, onRetryMistakes, onRetryAll, onDelete, onAddMore, onRemix, onPlaySynapse }) => {
   const percentage = Math.round((result.correctCount / result.totalQuestions) * 100);
   const { playFanfare, playClick } = useGameSound();
   const [showFlashcards, setShowFlashcards] = useState(false);
@@ -317,6 +318,13 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({ result, questions, o
           <button onClick={() => setShowFlashcards(true)} className="btn-tactile w-full py-4 bg-white border-slate-200 text-slate-700 rounded-2xl font-bold shadow-sm flex justify-center items-center">
             <Layers size={20} className="mr-2 text-indigo-500" /> Review Mode (SRS)
           </button>
+
+          {onPlaySynapse && (
+            <button onClick={onPlaySynapse} className="btn-tactile w-full py-4 bg-slate-900 text-white rounded-2xl font-bold shadow-lg flex justify-center items-center hover:bg-slate-800 transition-all">
+               <Activity size={20} className="mr-2" /> 
+               Mainkan Mode Synapse
+            </button>
+          )}
 
           <button onClick={onReset} className="w-full py-4 bg-transparent border-2 border-dashed border-slate-300 text-slate-400 rounded-2xl font-bold hover:border-slate-400 hover:text-slate-600 transition-all flex justify-center items-center">
             <RefreshCw size={20} className="mr-2" /> Buat Quiz Baru

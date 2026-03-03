@@ -104,7 +104,7 @@ export const UniversalQuestionCard: React.FC<UniversalCardProps> = ({
         <div className="mb-8 p-6 bg-slate-50 border border-slate-100 rounded-3xl text-center shadow-inner relative overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-sky-400 to-indigo-400" />
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-3">Pernyataan</span>
-            <div className="font-serif text-xl md:text-2xl text-slate-800 leading-snug italic">
+            <div className="font-serif text-2xl md:text-4xl text-slate-800 leading-snug italic">
                 "<RenderText text={question.proposedAnswer || ''} />"
             </div>
         </div>
@@ -214,7 +214,7 @@ export const UniversalQuestionCard: React.FC<UniversalCardProps> = ({
          </div>
 
          {/* QUESTION TEXT */}
-         <h2 className="text-xl md:text-3xl font-bold text-slate-800 leading-tight mb-10">
+         <h2 className="text-2xl md:text-4xl font-bold text-slate-800 leading-tight mb-10">
             <RenderText text={question.text} />
          </h2>
 

@@ -103,9 +103,14 @@ export const applyKeycardToSession = (data: KeycardData): { upgraded: boolean, n
          saveApiKey('gemini', data.config.geminiKey);
       }
       
-      // WIPE GROQ (Enforce Exclusivity)
-      localStorage.removeItem('glassquiz_groq_key');
-      localStorage.removeItem('glassquiz_groq_keys_pool');
+      // DO NOT WIPE GROQ (Allow Co-existence)
+      // If the card ALSO has Groq keys, load them too
+      if (data.config.groqKeys && data.config.groqKeys.length > 0) {
+         saveApiKeysPool('groq', data.config.groqKeys);
+         saveApiKey('groq', data.config.groqKeys[0]);
+      } else if (data.config.groqKey) {
+         saveApiKey('groq', data.config.groqKey);
+      }
       
   } else {
       // Load Groq
@@ -116,9 +121,14 @@ export const applyKeycardToSession = (data: KeycardData): { upgraded: boolean, n
          saveApiKey('groq', data.config.groqKey);
       }
       
-      // WIPE GEMINI (Enforce Exclusivity)
-      localStorage.removeItem('glassquiz_api_key');
-      localStorage.removeItem('glassquiz_gemini_keys_pool');
+      // DO NOT WIPE GEMINI (Allow Co-existence)
+      // If the card ALSO has Gemini keys, load them too
+      if (data.config.geminiKeys && data.config.geminiKeys.length > 0) {
+         saveApiKeysPool('gemini', data.config.geminiKeys);
+         saveApiKey('gemini', data.config.geminiKeys[0]);
+      } else if (data.config.geminiKey) {
+         saveApiKey('gemini', data.config.geminiKey);
+      }
   }
 
   // Handle Legacy cards (v1.0) that had generic 'apiKey' and 'provider'

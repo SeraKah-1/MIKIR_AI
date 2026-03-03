@@ -39,7 +39,7 @@ export const NeuroSync = {
     } else {
       // Gagal / Lupa
       repetition = 0;
-      interval = 1;
+      interval = 0; // Immediate review (0 days)
     }
 
     // Update Easiness Factor
@@ -47,7 +47,14 @@ export const NeuroSync = {
     if (easiness < 1.3) easiness = 1.3;
 
     const nextReview = new Date();
+    // If interval is 0, set to now (or slightly in future to avoid immediate re-fetch issues if query uses > now)
+    // But usually <= now is used for due items.
     nextReview.setDate(nextReview.getDate() + interval);
+    
+    // If interval is 0, ensure it is definitely "due" (e.g. set to now or 1 min ago)
+    if (interval === 0) {
+        nextReview.setMinutes(nextReview.getMinutes() - 1);
+    }
 
     return {
       ...item,

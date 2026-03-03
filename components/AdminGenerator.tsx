@@ -32,7 +32,9 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
   const [expiryDays, setExpiryDays] = useState(30);
   
   // Capabilities Checklist
-  const [selectedProvider, setSelectedProvider] = useState<'gemini' | 'groq'>('gemini');
+  const [enableGemini, setEnableGemini] = useState(true);
+  const [enableGroq, setEnableGroq] = useState(false);
+  const [preferredProvider, setPreferredProvider] = useState<'gemini' | 'groq'>('gemini');
   const [includeSupabase, setIncludeSupabase] = useState(false);
 
   // Key Values (Manual Input by default)
@@ -45,10 +47,10 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
   const loadMyKeys = (type: 'gemini' | 'groq' | 'supabase') => {
     if (type === 'gemini') {
         const key = getApiKey('gemini');
-        if (key) setGeminiKeys(key);
+        if (key) setGeminiKeys(prev => prev ? prev + '\n' + key : key);
     } else if (type === 'groq') {
         const key = getApiKey('groq');
-        if (key) setGroqKeys(key);
+        if (key) setGroqKeys(prev => prev ? prev + '\n' + key : key);
     } else if (type === 'supabase') {
         const config = getSupabaseConfig();
         if (config) {
@@ -83,26 +85,31 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
           setExpiryDays(diffDays > 0 ? diffDays : 30);
         }
 
-        // Keys - Determine Provider
+        // Keys - Load Both
         if (data.config.geminiKeys && data.config.geminiKeys.length > 0) {
-           setSelectedProvider('gemini');
+           setEnableGemini(true);
            setGeminiKeys(data.config.geminiKeys.join('\n'));
-           setGroqKeys(''); // Clear other
         } else if (data.config.geminiKey) {
-           setSelectedProvider('gemini');
+           setEnableGemini(true);
            setGeminiKeys(data.config.geminiKey);
-           setGroqKeys('');
-        } else if (data.config.groqKeys && data.config.groqKeys.length > 0) {
-           setSelectedProvider('groq');
-           setGroqKeys(data.config.groqKeys.join('\n'));
-           setGeminiKeys('');
-        } else if (data.config.groqKey) {
-           setSelectedProvider('groq');
-           setGroqKeys(data.config.groqKey);
-           setGeminiKeys('');
         } else {
-           // Default fallback
-           setSelectedProvider('gemini');
+           setEnableGemini(false);
+           setGeminiKeys('');
+        }
+
+        if (data.config.groqKeys && data.config.groqKeys.length > 0) {
+           setEnableGroq(true);
+           setGroqKeys(data.config.groqKeys.join('\n'));
+        } else if (data.config.groqKey) {
+           setEnableGroq(true);
+           setGroqKeys(data.config.groqKey);
+        } else {
+           setEnableGroq(false);
+           setGroqKeys('');
+        }
+        
+        if (data.config.preferredProvider) {
+            setPreferredProvider(data.config.preferredProvider);
         }
 
         if (data.config.supabaseUrl) {
@@ -155,13 +162,14 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
       return;
     }
     
-    // Process Arrays based on Selected Provider
-    const geminiArray = selectedProvider === 'gemini' ? geminiKeys.split('\n').map(k => k.trim()).filter(k => k.length > 5) : [];
-    const groqArray = selectedProvider === 'groq' ? groqKeys.split('\n').map(k => k.trim()).filter(k => k.length > 5) : [];
+    // Process Arrays based on Enabled Providers
+    const geminiArray = enableGemini ? geminiKeys.split('\n').map(k => k.trim()).filter(k => k.length > 5) : [];
+    const groqArray = enableGroq ? groqKeys.split('\n').map(k => k.trim()).filter(k => k.length > 5) : [];
 
     // Validation
-    if (selectedProvider === 'gemini' && geminiArray.length === 0) { alert("Gemini Key dipilih tapi kosong!"); return; }
-    if (selectedProvider === 'groq' && groqArray.length === 0) { alert("Groq Key dipilih tapi kosong!"); return; }
+    if (enableGemini && geminiArray.length === 0) { alert("Gemini Key dipilih tapi kosong!"); return; }
+    if (enableGroq && groqArray.length === 0) { alert("Groq Key dipilih tapi kosong!"); return; }
+    if (!enableGemini && !enableGroq) { alert("Pilih minimal satu AI Provider (Gemini atau Groq)."); return; }
     if (includeSupabase && (!supabaseUrl || !supabaseKey)) { alert("Supabase config tidak lengkap!"); return; }
 
     setIsGenerating(true);
@@ -191,15 +199,15 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
           expires_at: Date.now() + (expiryDays * 24 * 60 * 60 * 1000),
         },
         config: {
-          // Only save keys for the selected provider
-          geminiKeys: selectedProvider === 'gemini' && geminiArray.length > 0 ? geminiArray : undefined,
-          groqKeys: selectedProvider === 'groq' && groqArray.length > 0 ? groqArray : undefined,
+          // Save keys for enabled providers
+          geminiKeys: enableGemini && geminiArray.length > 0 ? geminiArray : undefined,
+          groqKeys: enableGroq && groqArray.length > 0 ? groqArray : undefined,
           
           // Legacy fields for backward compatibility
-          geminiKey: selectedProvider === 'gemini' && geminiArray.length > 0 ? geminiArray[0] : undefined,
-          groqKey: selectedProvider === 'groq' && groqArray.length > 0 ? groqArray[0] : undefined,
+          geminiKey: enableGemini && geminiArray.length > 0 ? geminiArray[0] : undefined,
+          groqKey: enableGroq && groqArray.length > 0 ? groqArray[0] : undefined,
           
-          preferredProvider: selectedProvider, 
+          preferredProvider: preferredProvider, 
           supabaseUrl: includeSupabase ? supabaseUrl : undefined,
           supabaseKey: includeSupabase ? supabaseKey : undefined
         }
@@ -420,28 +428,40 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
               <section className="space-y-4">
                   <div className="flex items-center gap-2 mb-4">
                     <Zap className="text-amber-500" size={18} />
-                    <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Select AI Provider</h3>
+                    <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Select AI Providers</h3>
                   </div>
                   
                   <div className="grid grid-cols-2 gap-4 mb-6">
                     <button 
-                      onClick={() => setSelectedProvider('gemini')}
-                      className={`p-4 rounded-xl border-2 flex flex-col items-center justify-center gap-2 transition-all ${selectedProvider === 'gemini' ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-400 hover:border-indigo-200'}`}
+                      onClick={() => { setEnableGemini(!enableGemini); if(!enableGemini) setPreferredProvider('gemini'); }}
+                      className={`p-4 rounded-xl border-2 flex flex-col items-center justify-center gap-2 transition-all ${enableGemini ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-400 hover:border-indigo-200'}`}
                     >
-                      <span className="font-bold">Google Gemini</span>
-                      <span className="text-[10px] uppercase tracking-wider font-bold bg-indigo-200 text-indigo-700 px-2 py-0.5 rounded">Recommended</span>
+                      <div className="flex items-center gap-2">
+                          <div className={`w-4 h-4 rounded border flex items-center justify-center ${enableGemini ? 'bg-indigo-600 border-indigo-600' : 'border-slate-300'}`}>
+                              {enableGemini && <Check size={12} className="text-white" />}
+                          </div>
+                          <span className="font-bold">Google Gemini</span>
+                      </div>
+                      {enableGemini && preferredProvider === 'gemini' && <span className="text-[10px] uppercase tracking-wider font-bold bg-indigo-200 text-indigo-700 px-2 py-0.5 rounded">Preferred</span>}
+                      {enableGemini && preferredProvider !== 'gemini' && <span onClick={(e) => { e.stopPropagation(); setPreferredProvider('gemini'); }} className="text-[10px] uppercase tracking-wider font-bold bg-slate-200 text-slate-500 px-2 py-0.5 rounded hover:bg-indigo-200 hover:text-indigo-700 cursor-pointer">Set Preferred</span>}
                     </button>
                     <button 
-                      onClick={() => setSelectedProvider('groq')}
-                      className={`p-4 rounded-xl border-2 flex flex-col items-center justify-center gap-2 transition-all ${selectedProvider === 'groq' ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-slate-200 bg-white text-slate-400 hover:border-orange-200'}`}
+                      onClick={() => { setEnableGroq(!enableGroq); if(!enableGroq) setPreferredProvider('groq'); }}
+                      className={`p-4 rounded-xl border-2 flex flex-col items-center justify-center gap-2 transition-all ${enableGroq ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-slate-200 bg-white text-slate-400 hover:border-orange-200'}`}
                     >
-                      <span className="font-bold">Groq Cloud</span>
-                      <span className="text-[10px] uppercase tracking-wider font-bold bg-orange-200 text-orange-700 px-2 py-0.5 rounded">Fastest</span>
+                      <div className="flex items-center gap-2">
+                          <div className={`w-4 h-4 rounded border flex items-center justify-center ${enableGroq ? 'bg-orange-600 border-orange-600' : 'border-slate-300'}`}>
+                              {enableGroq && <Check size={12} className="text-white" />}
+                          </div>
+                          <span className="font-bold">Groq Cloud</span>
+                      </div>
+                      {enableGroq && preferredProvider === 'groq' && <span className="text-[10px] uppercase tracking-wider font-bold bg-orange-200 text-orange-700 px-2 py-0.5 rounded">Preferred</span>}
+                      {enableGroq && preferredProvider !== 'groq' && <span onClick={(e) => { e.stopPropagation(); setPreferredProvider('groq'); }} className="text-[10px] uppercase tracking-wider font-bold bg-slate-200 text-slate-500 px-2 py-0.5 rounded hover:bg-orange-200 hover:text-orange-700 cursor-pointer">Set Preferred</span>}
                     </button>
                   </div>
 
                   {/* Gemini Input */}
-                  {selectedProvider === 'gemini' && (
+                  {enableGemini && (
                     <div className="p-4 rounded-xl border border-indigo-200 bg-indigo-50/50 transition-all">
                       <div className="flex items-center justify-between mb-3">
                           <span className="font-bold text-slate-700">Gemini API Keys</span>
@@ -488,7 +508,7 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
                   )}
 
                   {/* Groq Input */}
-                  {selectedProvider === 'groq' && (
+                  {enableGroq && (
                     <div className="p-4 rounded-xl border border-orange-200 bg-orange-50/50 transition-all">
                       <div className="flex items-center justify-between mb-3">
                           <span className="font-bold text-slate-700">Groq API Keys</span>

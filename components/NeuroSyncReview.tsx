@@ -51,7 +51,7 @@ export const NeuroSyncReview: React.FC<NeuroSyncReviewProps> = ({ items, keycard
             <span className="px-3 py-1 rounded-full bg-theme-primary/10 text-theme-primary text-xs font-bold uppercase tracking-widest border border-theme-primary/20 mb-4 inline-block">
               Pertanyaan Kuis
             </span>
-            <h2 className="text-2xl md:text-3xl font-bold leading-tight mt-4">{q.text}</h2>
+            <h2 className="text-3xl md:text-5xl font-bold leading-tight mt-4">{q.text}</h2>
           </div>
 
           <AnimatePresence mode="wait">
@@ -85,7 +85,7 @@ export const NeuroSyncReview: React.FC<NeuroSyncReviewProps> = ({ items, keycard
                     <CheckCircle2 className="w-4 h-4" />
                     Jawaban Benar
                   </div>
-                  <p className="text-xl font-bold">{q.options[q.correctIndex] || q.correctAnswer}</p>
+                  <p className="text-2xl md:text-4xl font-bold">{q.options[q.correctIndex] || q.correctAnswer}</p>
                 </div>
 
                 {q.explanation && (

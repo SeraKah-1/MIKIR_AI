@@ -22,9 +22,11 @@ export const useGameSound = () => {
       const resume = () => {
         ctx.resume();
         window.removeEventListener('click', resume);
+        window.removeEventListener('touchstart', resume);
         window.removeEventListener('keydown', resume);
       };
       window.addEventListener('click', resume);
+      window.addEventListener('touchstart', resume);
       window.addEventListener('keydown', resume);
     }
   }, []);

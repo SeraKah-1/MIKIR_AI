@@ -66,8 +66,16 @@ export const MultiplayerLobby: React.FC<MultiplayerLobbyProps> = ({ onStartGame 
         if (quizData) {
           onStartGame(quizData, false, roomId, playerId);
         } else {
-           // If quizData is missing (e.g. player joined late or didn't fetch yet), fetch it now?
-           // Ideally players fetch quizData upon joining.
+           // Fallback: Fetch quiz data if missing
+           MikirCloud.multiplayer.findRoom(config, roomCode).then(room => {
+              if (room && room.quiz_data) {
+                  let safeData = room.quiz_data;
+                  if (typeof safeData === 'string') {
+                      try { safeData = JSON.parse(safeData); } catch (e) {}
+                  }
+                  onStartGame(safeData, false, roomId, playerId);
+              }
+           });
         }
       }
     });
@@ -228,7 +236,12 @@ export const MultiplayerLobby: React.FC<MultiplayerLobbyProps> = ({ onStartGame 
 
       setRoomId(room.id);
       setPlayerId(player.id);
-      setQuizData(room.quiz_data); // Assuming quiz_data is fetched with room
+      
+      let safeQuizData = room.quiz_data;
+      if (typeof safeQuizData === 'string') {
+          try { safeQuizData = JSON.parse(safeQuizData); } catch (e) { console.error("Failed to parse quiz data", e); }
+      }
+      setQuizData(safeQuizData); 
       setMode('player_lobby');
     } catch (err: any) {
       setError(err.message);
