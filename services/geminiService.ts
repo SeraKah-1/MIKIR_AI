@@ -5,7 +5,7 @@
  * ==========================================
  */
 
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { Question, QuizMode, ExamStyle } from "../types";
 import { processFilesToContext } from "./fileService";
 
@@ -30,33 +30,22 @@ const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: s
   }
 
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    
     // Simple text files
     if (file.type === "text/markdown" || file.type === "text/plain" || file.name.endsWith('.md') || file.name.endsWith('.txt')) {
+      const reader = new FileReader();
       reader.onload = () => {
         const result = reader.result as string;
         resolve({ text: result });
       };
+      reader.onerror = (err) => reject(new Error(`Gagal membaca file text ${file.name}`));
       reader.readAsText(file);
     } else {
-      // PDF / Images - Use ArrayBuffer for better memory management than DataURL
+      // PDF / Images - Use readAsDataURL which is native, async, and much faster/memory-efficient
+      const reader = new FileReader();
       reader.onload = () => {
-        const arrayBuffer = reader.result as ArrayBuffer;
-        const bytes = new Uint8Array(arrayBuffer);
-        
-        // Convert to base64 in chunks to avoid "Maximum call stack size exceeded" and high memory spikes
-        let binary = '';
-        const len = bytes.byteLength;
-        const chunkSize = 8192;
-        
-        for (let i = 0; i < len; i += chunkSize) {
-          const chunk = bytes.subarray(i, Math.min(i + chunkSize, len));
-          // @ts-ignore
-          binary += String.fromCharCode.apply(null, chunk);
-        }
-        
-        const base64Data = btoa(binary);
+        const result = reader.result as string;
+        // Remove the Data-URL prefix (e.g. "data:image/png;base64,") to get raw base64
+        const base64Data = result.split(',')[1];
         
         resolve({
           inlineData: {
@@ -65,84 +54,84 @@ const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: s
           },
         });
       };
-      reader.readAsArrayBuffer(file);
+      reader.onerror = (err) => {
+        console.error("FileReader Error:", err);
+        reject(new Error(`Gagal membaca file ${file.name}`));
+      };
+      reader.readAsDataURL(file);
     }
-    reader.onerror = (err) => {
-      console.error("FileReader Error:", err);
-      reject(new Error(`Gagal membaca file ${file.name}`));
-    };
   });
 };
 
 const cleanAndParseJSON = (rawText: string): any[] => {
   if (!rawText) return [];
 
+  console.log("Raw AI Response (First 500 chars):", rawText.substring(0, 500));
+
   // 1. Remove <thinking> tags (Crucial for Gemini 2.0/3.0 Thinking models)
   let text = rawText;
   if (text && text.includes("<thinking>")) {
-    // Use a more robust regex that handles nested tags if any
     text = text.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "").trim();
   }
 
   // 2. Cleanup Markdown blocks
-  if (text) {
-    text = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+  text = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+
+  // 3. Try Direct Parsing First (Best Case)
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed;
+    if (typeof parsed === 'object') {
+      // Check for common wrapper keys
+      if (Array.isArray(parsed.questions)) return parsed.questions;
+      if (Array.isArray(parsed.data)) return parsed.data;
+      if (Array.isArray(parsed.items)) return parsed.items;
+      
+      // Fallback: return any array found in values
+      for (const key in parsed) {
+        if (Array.isArray(parsed[key])) return parsed[key];
+      }
+      
+      // Single object case
+      if (parsed.text && parsed.options) return [parsed];
+    }
+  } catch (e) {
+    // Continue to heuristic extraction
   }
 
-  // 3. Find the first '[' and last ']'
+  // 4. Heuristic Extraction (Find Array)
   const firstOpen = text.indexOf('[');
   const lastClose = text.lastIndexOf(']');
 
-  if (firstOpen === -1) {
-      // Fallback: Check if it's a single object or wrapped in an object
-      const firstBrace = text.indexOf('{');
-      const lastBrace = text.lastIndexOf('}');
-      if (firstBrace !== -1 && lastBrace !== -1) {
-          try {
-              const potentialObj = JSON.parse(text.substring(firstBrace, lastBrace + 1));
-              // If it's an object with a questions array
-              if (potentialObj.questions && Array.isArray(potentialObj.questions)) return potentialObj.questions;
-              // If it's an object with any array
-              for (const key in potentialObj) {
-                  if (Array.isArray(potentialObj[key])) return potentialObj[key];
-              }
-              // If it's just a single question object
-              if (potentialObj.text && potentialObj.options) return [potentialObj];
-          } catch(e) { /* ignore */ }
-      }
-      throw new Error("AI memberikan format yang tidak dikenali. Harap coba lagi.");
-  }
-
-  // 4. Extract the array part
-  let jsonContent = "";
-  if (lastClose === -1 || lastClose < firstOpen) {
-      // Handle truncated JSON (common in large generations)
-      const contentSoFar = text.substring(firstOpen);
-      const lastBrace = contentSoFar.lastIndexOf('}');
-      if (lastBrace !== -1) {
-          jsonContent = contentSoFar.substring(0, lastBrace + 1) + ']';
-      } else {
-          return [];
-      }
-  } else {
-      jsonContent = text.substring(firstOpen, lastClose + 1);
-  }
-
-  try {
-    return JSON.parse(jsonContent);
-  } catch (e) {
-    // 5. Repair trailing commas and common AI JSON errors
+  if (firstOpen !== -1 && lastClose !== -1) {
+    const jsonContent = text.substring(firstOpen, lastClose + 1);
     try {
-        const fixedContent = jsonContent
-          .replace(/,\s*([\]}])/g, '$1') // Trailing commas
-          .replace(/\\n/g, " ") // Newlines in strings
-          .replace(/\n/g, " "); // Actual newlines
-        return JSON.parse(fixedContent);
-    } catch (e2) {
-        console.error("JSON Parse Fail:", e2, "Content snippet:", jsonContent.substring(0, 100));
-        throw new Error("Gagal memproses data kuis. Struktur data dari AI rusak.");
+      return JSON.parse(jsonContent);
+    } catch (e) {
+      // Try fixing common trailing comma issues
+      try {
+        const fixed = jsonContent.replace(/,\s*]/g, ']');
+        return JSON.parse(fixed);
+      } catch (e2) {}
     }
   }
+
+  // 5. Heuristic Extraction (Find Object with Array)
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1) {
+    const jsonContent = text.substring(firstBrace, lastBrace + 1);
+    try {
+      const parsed = JSON.parse(jsonContent);
+      if (Array.isArray(parsed.questions)) return parsed.questions;
+      for (const key in parsed) {
+        if (Array.isArray(parsed[key])) return parsed[key];
+      }
+    } catch (e) {}
+  }
+
+  console.error("Failed to parse JSON. Raw text:", text);
+  throw new Error("Gagal memproses data kuis. Format AI tidak valid.");
 };
 
 const sanitizeQuestion = (q: any): Omit<Question, 'id'> => {
@@ -176,23 +165,25 @@ const sanitizeQuestion = (q: any): Omit<Question, 'id'> => {
     correctIndex: newCorrectIndex,
     explanation: String(q.explanation || "Pembahasan tidak tersedia."),
     hint: String(q.hint || "Coba ingat kembali konsep utamanya."),
-    keyPoint: String(q.keyPoint || "Umum").substring(0, 20),
+    keyPoint: String(q.keyPoint || "Umum").substring(0, 50), // Increased limit
     difficulty: "Medium"
   };
 };
 
 /**
- * SMART INGESTION (HEAVY LIFTING)
- * Menggunakan Loop Fallback. Jika model Pro Experimental gagal, coba model stabil.
+ * SMART INGESTION (SIMPLIFIED)
+ * Menggunakan satu model cepat (Flash) untuk meringkas materi.
+ * Tidak ada looping model lain agar cepat dan hemat kuota.
  */
 export const summarizeMaterial = async (apiKey: string, content: string): Promise<string> => {
   if (!content) return "";
   
   const ai = new GoogleGenAI({ apiKey });
+  const modelName = 'gemini-3-flash-preview'; // Standard Fast Model
   
   const prompt = `
     ROLE: Senior Knowledge Engineer.
-    TASK: Process the provided raw document into a "High-Density Knowledge Summary" optimized for future RAG (Retrieval Augmented Generation).
+    TASK: Process the provided raw document into a "High-Density Knowledge Summary" optimized for future RAG.
     
     INSTRUCTIONS:
     1. READ the entire raw text.
@@ -200,42 +191,30 @@ export const summarizeMaterial = async (apiKey: string, content: string): Promis
     3. DISCARD fluff, introductions, filler words, and repetitive examples.
     4. FORMAT the output as a structured list of facts and concepts.
     
-    OUTPUT FORMAT (Plain Text):
-    [Topic Name]
-    - Concept A: Definition...
-    - Fact B: Date/Value...
-    - Relation C: A causes B because...
-    
-    RAW TEXT (Truncated for safety):
-    "${content.substring(0, 200000)}" 
+    RAW TEXT:
+    "${content.substring(0, 500000)}" 
   `;
 
-  // --- RETRY LOGIC WITH MULTIPLE MODELS ---
-  for (const modelName of INGESTION_MODELS) {
-    try {
-      console.log(`[Smart Ingest] Trying model: ${modelName}...`);
+  try {
+      console.log(`[Smart Ingest] Summarizing with ${modelName}...`);
       const response = await ai.models.generateContent({
         model: modelName,
         contents: { parts: [{ text: prompt }] }
       });
       
       const result = response.text;
-      if (!result) throw new Error("Empty response");
+      if (!result) return content.substring(0, 10000); // Fallback to raw if empty
       
-      return `[SMART CACHE - ${modelName}]\n${result}`;
-    } catch (e: any) {
-      console.warn(`[Smart Ingest] Model ${modelName} failed:`, e.message);
-      // Continue to next model in loop
-    }
+      return `[SUMMARY]\n${result}`;
+  } catch (e: any) {
+      console.warn(`[Smart Ingest] Failed:`, e.message);
+      return content.substring(0, 10000); // Fallback to raw on error
   }
-
-  console.error("[Smart Ingest] All models failed. Falling back to raw text.");
-  return content.substring(0, 5000); // Ultimate Fallback if AI is completely dead
 };
 
 /**
- * QUIZ GENERATION (FAST EXECUTION)
- * Implements "Retrieval Practice" & "Elaborative Feedback"
+ * QUIZ GENERATION (DIRECT MODE)
+ * Tanpa "Subsidi" (Fallback Model). Model yang dipilih adalah model yang dieksekusi.
  */
 export const generateQuiz = async (
   apiKey: string, 
@@ -244,7 +223,7 @@ export const generateQuiz = async (
   modelId: string, // User selected model
   questionCount: number,
   mode: QuizMode,
-  examStyles: ExamStyle[] = [ExamStyle.C2_CONCEPT], // Bloom's Taxonomy Array
+  examStyles: ExamStyle[] = [ExamStyle.C2_CONCEPT],
   onProgress: (status: string) => void,
   existingQuestionsContext: string[] = [],
   customPrompt: string = "",
@@ -254,27 +233,28 @@ export const generateQuiz = async (
   if (!apiKey) throw new Error("API Key Gemini belum diatur.");
   const ai = new GoogleGenAI({ apiKey: apiKey });
   
-  const parts: any[] = [];
+  // --- PREPARE CONTEXT ---
+  const baseParts: any[] = [];
   let contextText = ""; 
 
   // 1. Handle Library Context
   if (libraryContext) {
-     onProgress("Memuat Smart Cache...");
-     parts.push({ text: `LIBRARY MATERIAL:\n${libraryContext.substring(0, 500000)}\n\nEND OF LIBRARY MATERIAL` }); 
+     onProgress("Memuat Context...");
+     baseParts.push({ text: `LIBRARY MATERIAL:\n${libraryContext}\n\nEND OF LIBRARY MATERIAL` }); 
      contextText = "[Library Source]";
   }
 
-  // 2. Handle File Uploads (Universal Extraction)
+  // 2. Handle File Uploads
   const fileArray = Array.isArray(files) ? files : (files ? [files] : []);
   if (fileArray.length > 0) {
     const extractedText = await processFilesToContext(fileArray, onProgress);
-    parts.push({ text: `DOCUMENT CONTENT:\n${extractedText.substring(0, 1000000)}\n\nEND OF DOCUMENT CONTENT` });
+    baseParts.push({ text: `DOCUMENT CONTENT:\n${extractedText}\n\nEND OF DOCUMENT CONTENT` });
     contextText += ` [Files: ${fileArray.map(f => f.name).join(', ')}]`; 
   } 
   
   // 3. Topic Focus
   if (topic) {
-    parts.push({ text: `IMPORTANT: FOCUS ONLY ON THIS TOPIC: "${topic}".` });
+    baseParts.push({ text: `IMPORTANT: FOCUS ONLY ON THIS TOPIC: "${topic}".` });
     if (!contextText) contextText = topic;
   }
 
@@ -288,114 +268,117 @@ export const generateQuiz = async (
     ? `COGNITIVE LEVELS (Mix these types): ${examStyles.join(', ')}`
     : `COGNITIVE LEVEL: ${ExamStyle.C2_CONCEPT}`;
 
-  // --- PROMPT ENGINEERING: LEARNING BY DOING ---
-  const finalPrompt = `
-    ROLE: Expert Tutor using "Socratic Method" and "Retrieval Practice".
-    
-    GOAL: Create an interactive quiz for the topic: "${topic || 'General Material from Context'}".
-    OBJECTIVE: To teach concepts THROUGH questions (Learning by Doing), not just test memory.
-    
-    ${bloomInstruction}
-    USER CUSTOM INSTRUCTION: "${customPrompt}"
+  // --- BATCHING STRATEGY (PARALLEL) ---
+  // Tetap menggunakan parallel batching karena ini murni untuk kecepatan, bukan "subsidi".
+  // Tapi logikanya disederhanakan: 1 Model, 1 Cara.
+  const BATCH_SIZE = 10; 
+  const totalBatches = Math.ceil(questionCount / BATCH_SIZE);
+  const batchPromises: Promise<Question[]>[] = [];
 
-    INSTRUCTIONS:
-    1. GENERATE EXACTLY ${questionCount} valid JSON objects.
-    2. USE the provided Knowledge Base (Library/Files). If Library is provided, STRICTLY adhere to it.
-    3. STRUCTURE each question with "Diagnostic Distractors".
-       - Option A: Correct Answer.
-       - Option B: Wrong (Definition Mix-up).
-       - Option C: Wrong (Calculation/Logic Error).
-       - Option D: Wrong (Common Misconception).
-    4. ELABORATIVE FEEDBACK (Crucial):
-       In the 'explanation' field, do NOT just say "B is correct".
-       You MUST use this Markdown format:
-       "**Jawaban Benar:** [Concept explanation]
-        
-        **Analisis Miskonsepsi:**
-        - [Why distractor 1 is wrong]
-        - [Why distractor 2 is wrong]"
-    5. SOCRATIC HINT:
-       Provide a 'hint' that guides the user to the answer without giving it away directly.
-
-    OUTPUT FORMAT (Strict JSON Array, NO intro text, NO markdown formatting outside the JSON):
-    [
-      {
-        "text": "Scenario/Question matching Bloom levels?",
-        "options": ["Correct Answer", "Distractor 1", "Distractor 2", "Distractor 3"],
-        "correctIndex": 0,
-        "explanation": "**Jawaban Benar:** ... \n\n **Analisis Miskonsepsi:** ...",
-        "hint": "Socratic hint to help the user...",
-        "keyPoint": "Tag (Concept)"
-      }
-    ]
-    ${avoidancePrompt}
-  `;
-
-  parts.push({ text: finalPrompt });
-
-  const selectedModel = modelId || DEFAULT_GENERATION_MODEL;
+  // Gunakan model yang dipilih user. Jika kosong, default ke Flash.
+  const selectedModel = modelId || 'gemini-3-flash-preview';
   onProgress(`Menyusun ${questionCount} soal dengan ${selectedModel}...`);
-  
-  // --- GENERATION RETRY LOGIC (Simple 1-level fallback) ---
-  const tryGenerate = async (model: string) => {
-      const response = await ai.models.generateContent({
-        model: model,
-        contents: { parts },
-        config: { 
-          responseMimeType: "application/json", 
-          temperature: 0.4, // Slightly higher for creative distractors
-          maxOutputTokens: 8192, 
-        }
-      });
-      return response;
+
+  // Define Schema
+  const responseSchema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      questions: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            text: { type: Type.STRING },
+            options: { type: Type.ARRAY, items: { type: Type.STRING } },
+            correctIndex: { type: Type.INTEGER },
+            explanation: { type: Type.STRING },
+            hint: { type: Type.STRING },
+            keyPoint: { type: Type.STRING },
+          },
+          required: ["text", "options", "correctIndex", "explanation", "hint", "keyPoint"],
+        },
+      },
+    },
+    required: ["questions"],
   };
 
-  try {
-      let response;
+  // Helper function to generate a batch
+  const generateBatch = async (batchIndex: number, count: number): Promise<Question[]> => {
+      const batchPrompt = `
+        ROLE: Expert Tutor.
+        GOAL: Create ${count} multiple-choice questions for: "${topic || 'Context'}".
+        
+        ${bloomInstruction}
+        USER NOTE: "${customPrompt}"
+    
+        INSTRUCTIONS:
+        1. GENERATE EXACTLY ${count} JSON objects.
+        2. USE provided Knowledge Base.
+        3. STRUCTURE:
+           - Option A: Correct.
+           - Option B, C, D: Distractors.
+        4. FEEDBACK: Explain why the answer is correct and why others are wrong.
+        5. HINT: Socratic hint.
+    
+        OUTPUT JSON format only.
+        ${avoidancePrompt}
+        (Batch ${batchIndex + 1}/${totalBatches})
+      `;
+
+      const parts = [...baseParts, { text: batchPrompt }];
+
       try {
-         response = await tryGenerate(selectedModel);
+         // DIRECT CALL - NO FALLBACKS
+         const response = await ai.models.generateContent({
+            model: selectedModel,
+            contents: { parts },
+            config: { 
+              responseMimeType: "application/json", 
+              responseSchema: responseSchema, 
+              temperature: 0.4, 
+            }
+         });
+
+         const responseText = response.text;
+         if (!responseText) throw new Error("Empty Response");
+
+         const rawQuestions = cleanAndParseJSON(responseText);
+         if (!Array.isArray(rawQuestions)) throw new Error("Format AI salah.");
+         
+         const validQuestions = rawQuestions.filter(q => q.text && q.options && q.options.length > 1);
+         return validQuestions.map(sanitizeQuestion) as any[];
+
       } catch (err: any) {
-         // Handle Free Tier Limits (429) or Model Not Found (404)
-         if (err.message.includes("429")) {
-             onProgress("Limit API Pro tercapai, mencoba model Flash (Free Tier)...");
-             response = await tryGenerate("gemini-3-flash-preview");
-         } else if (err.message.includes("404") || err.message.includes("not found")) {
-             console.warn(`Model ${selectedModel} not found, falling back to stable.`);
-             onProgress("Model tidak ditemukan, menggunakan model Stabil...");
-             response = await tryGenerate("gemini-2.5-flash");
-         } else {
-             throw err;
-         }
+         console.error(`Batch ${batchIndex} Error (${selectedModel}):`, err.message);
+         // Jika error, return array kosong agar batch lain tetap jalan (Partial Success)
+         // Atau throw error jika ingin fail fast. User minta "jangan bikin error", jadi partial success lebih aman.
+         return []; 
+      }
+  };
+
+  // --- EXECUTE PARALLEL BATCHES ---
+  for (let i = 0; i < totalBatches; i++) {
+      const countForBatch = Math.min(BATCH_SIZE, questionCount - (i * BATCH_SIZE));
+      batchPromises.push(generateBatch(i, countForBatch));
+  }
+
+  try {
+      const results = await Promise.all(batchPromises);
+      const allQuestions = results.flat();
+
+      if (allQuestions.length < 1) {
+         throw new Error(`Gagal generate soal dengan model ${selectedModel}. Coba ganti model atau kurangi materi.`);
       }
 
-      const responseText = response.text;
-      if (!responseText) throw new Error("AI Empty Response");
-
-      onProgress("Memvalidasi Soal...");
-      const rawQuestions = cleanAndParseJSON(responseText);
-
-      if (!Array.isArray(rawQuestions)) throw new Error("Format AI salah (Bukan Array).");
-      
-      const validQuestions = rawQuestions.filter(q => q.text && !q.text.includes("ERROR") && q.options && q.options.length > 1);
-
-      if (validQuestions.length < 2) {
-         throw new Error("AI gagal generate cukup soal. Coba kurangi materi atau spesifikkan topik.");
-      }
-
-      const finalQuestions = validQuestions.map((q, index) => ({
-        ...sanitizeQuestion(q),
+      const finalQuestions = allQuestions.map((q, index) => ({
+        ...q,
         id: index + 1
       }));
 
       return { questions: finalQuestions, contextText };
 
   } catch (err: any) {
-      console.error("Gemini Error:", err);
-      if (err.message.includes("404") || err.message.includes("not found")) {
-         throw new Error(`Model ${modelId} tidak tersedia. Coba ganti model di Settings.`);
-      }
-      if (err.message.includes("429")) throw new Error("Server sibuk (Rate Limit). Tunggu sebentar.");
-      
+      console.error("Gemini Fatal Error:", err);
       throw err;
   }
 };
@@ -407,7 +390,7 @@ export const chatWithDocument = async (apiKey: string, modelId: string, history:
   const parts: any[] = [];
 
   if (contextText) {
-    parts.push({ text: `CONTEXT MATERIAL:\n${contextText.substring(0, 100000)}\n\nEND OF CONTEXT MATERIAL` });
+    parts.push({ text: `CONTEXT MATERIAL:\n${contextText}\n\nEND OF CONTEXT MATERIAL` });
   }
 
   if (file) {

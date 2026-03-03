@@ -32,8 +32,7 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
   const [expiryDays, setExpiryDays] = useState(30);
   
   // Capabilities Checklist
-  const [includeGemini, setIncludeGemini] = useState(false);
-  const [includeGroq, setIncludeGroq] = useState(false);
+  const [selectedProvider, setSelectedProvider] = useState<'gemini' | 'groq'>('gemini');
   const [includeSupabase, setIncludeSupabase] = useState(false);
 
   // Key Values (Manual Input by default)
@@ -84,27 +83,26 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
           setExpiryDays(diffDays > 0 ? diffDays : 30);
         }
 
-        // Keys
+        // Keys - Determine Provider
         if (data.config.geminiKeys && data.config.geminiKeys.length > 0) {
-           setIncludeGemini(true);
+           setSelectedProvider('gemini');
            setGeminiKeys(data.config.geminiKeys.join('\n'));
+           setGroqKeys(''); // Clear other
         } else if (data.config.geminiKey) {
-           setIncludeGemini(true);
+           setSelectedProvider('gemini');
            setGeminiKeys(data.config.geminiKey);
-        } else {
-           setIncludeGemini(false);
-           setGeminiKeys('');
-        }
-
-        if (data.config.groqKeys && data.config.groqKeys.length > 0) {
-           setIncludeGroq(true);
+           setGroqKeys('');
+        } else if (data.config.groqKeys && data.config.groqKeys.length > 0) {
+           setSelectedProvider('groq');
            setGroqKeys(data.config.groqKeys.join('\n'));
+           setGeminiKeys('');
         } else if (data.config.groqKey) {
-          setIncludeGroq(true);
-          setGroqKeys(data.config.groqKey);
+           setSelectedProvider('groq');
+           setGroqKeys(data.config.groqKey);
+           setGeminiKeys('');
         } else {
-          setIncludeGroq(false);
-          setGroqKeys('');
+           // Default fallback
+           setSelectedProvider('gemini');
         }
 
         if (data.config.supabaseUrl) {
@@ -157,13 +155,13 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
       return;
     }
     
-    // Process Arrays
-    const geminiArray = includeGemini ? geminiKeys.split('\n').map(k => k.trim()).filter(k => k.length > 5) : [];
-    const groqArray = includeGroq ? groqKeys.split('\n').map(k => k.trim()).filter(k => k.length > 5) : [];
+    // Process Arrays based on Selected Provider
+    const geminiArray = selectedProvider === 'gemini' ? geminiKeys.split('\n').map(k => k.trim()).filter(k => k.length > 5) : [];
+    const groqArray = selectedProvider === 'groq' ? groqKeys.split('\n').map(k => k.trim()).filter(k => k.length > 5) : [];
 
     // Validation
-    if (includeGemini && geminiArray.length === 0) { alert("Gemini Key dipilih tapi kosong!"); return; }
-    if (includeGroq && groqArray.length === 0) { alert("Groq Key dipilih tapi kosong!"); return; }
+    if (selectedProvider === 'gemini' && geminiArray.length === 0) { alert("Gemini Key dipilih tapi kosong!"); return; }
+    if (selectedProvider === 'groq' && groqArray.length === 0) { alert("Groq Key dipilih tapi kosong!"); return; }
     if (includeSupabase && (!supabaseUrl || !supabaseKey)) { alert("Supabase config tidak lengkap!"); return; }
 
     setIsGenerating(true);
@@ -193,13 +191,15 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
           expires_at: Date.now() + (expiryDays * 24 * 60 * 60 * 1000),
         },
         config: {
-          geminiKeys: geminiArray.length > 0 ? geminiArray : undefined,
-          groqKeys: groqArray.length > 0 ? groqArray : undefined,
-          // Support Legacy fields for backward compatibility, use first key
-          geminiKey: geminiArray.length > 0 ? geminiArray[0] : undefined,
-          groqKey: groqArray.length > 0 ? groqArray[0] : undefined,
+          // Only save keys for the selected provider
+          geminiKeys: selectedProvider === 'gemini' && geminiArray.length > 0 ? geminiArray : undefined,
+          groqKeys: selectedProvider === 'groq' && groqArray.length > 0 ? groqArray : undefined,
           
-          preferredProvider: includeGemini ? 'gemini' : 'groq', 
+          // Legacy fields for backward compatibility
+          geminiKey: selectedProvider === 'gemini' && geminiArray.length > 0 ? geminiArray[0] : undefined,
+          groqKey: selectedProvider === 'groq' && groqArray.length > 0 ? groqArray[0] : undefined,
+          
+          preferredProvider: selectedProvider, 
           supabaseUrl: includeSupabase ? supabaseUrl : undefined,
           supabaseKey: includeSupabase ? supabaseKey : undefined
         }
@@ -416,37 +416,44 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
 
               <hr className="border-slate-100" />
 
-              {/* Section 2: Embed Capabilities */}
+              {/* Section 2: AI Provider Selection */}
               <section className="space-y-4">
                   <div className="flex items-center gap-2 mb-4">
                     <Zap className="text-amber-500" size={18} />
-                    <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Embed API Keys (Multi-Line)</h3>
+                    <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Select AI Provider</h3>
                   </div>
-                  <p className="text-xs text-slate-500 mb-4">
-                    Anda dapat memasukkan <b>banyak Key sekaligus</b>. Pisahkan dengan baris baru (Enter). Sistem akan merotasi penggunaan Key secara otomatis.
-                  </p>
+                  
+                  <div className="grid grid-cols-2 gap-4 mb-6">
+                    <button 
+                      onClick={() => setSelectedProvider('gemini')}
+                      className={`p-4 rounded-xl border-2 flex flex-col items-center justify-center gap-2 transition-all ${selectedProvider === 'gemini' ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-400 hover:border-indigo-200'}`}
+                    >
+                      <span className="font-bold">Google Gemini</span>
+                      <span className="text-[10px] uppercase tracking-wider font-bold bg-indigo-200 text-indigo-700 px-2 py-0.5 rounded">Recommended</span>
+                    </button>
+                    <button 
+                      onClick={() => setSelectedProvider('groq')}
+                      className={`p-4 rounded-xl border-2 flex flex-col items-center justify-center gap-2 transition-all ${selectedProvider === 'groq' ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-slate-200 bg-white text-slate-400 hover:border-orange-200'}`}
+                    >
+                      <span className="font-bold">Groq Cloud</span>
+                      <span className="text-[10px] uppercase tracking-wider font-bold bg-orange-200 text-orange-700 px-2 py-0.5 rounded">Fastest</span>
+                    </button>
+                  </div>
 
-                  {/* Gemini */}
-                  <div className={`p-4 rounded-xl border transition-all ${includeGemini ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-slate-200 opacity-70'}`}>
-                    <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                          <input type="checkbox" checked={includeGemini} onChange={e => setIncludeGemini(e.target.checked)} className="w-5 h-5 accent-indigo-600 rounded cursor-pointer" />
-                          <span className="font-bold text-slate-700">Google Gemini</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            {includeGemini && (
-                                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-[10px] flex items-center bg-indigo-100 text-indigo-600 px-2 py-1 rounded hover:bg-indigo-200 font-bold">
-                                  Dapatkan Key <ArrowRight size={10} className="ml-1" />
-                                </a>
-                            )}
-                            {includeGemini && (
-                                <button onClick={() => loadMyKeys('gemini')} className="text-[10px] flex items-center bg-indigo-100 text-indigo-600 px-2 py-1 rounded hover:bg-indigo-200">
-                                  <Copy size={10} className="mr-1" /> Load Mine
-                                </button>
-                            )}
-                        </div>
-                    </div>
-                    {includeGemini && (
+                  {/* Gemini Input */}
+                  {selectedProvider === 'gemini' && (
+                    <div className="p-4 rounded-xl border border-indigo-200 bg-indigo-50/50 transition-all">
+                      <div className="flex items-center justify-between mb-3">
+                          <span className="font-bold text-slate-700">Gemini API Keys</span>
+                          <div className="flex items-center gap-2">
+                              <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-[10px] flex items-center bg-indigo-100 text-indigo-600 px-2 py-1 rounded hover:bg-indigo-200 font-bold">
+                                Dapatkan Key <ArrowRight size={10} className="ml-1" />
+                              </a>
+                              <button onClick={() => loadMyKeys('gemini')} className="text-[10px] flex items-center bg-indigo-100 text-indigo-600 px-2 py-1 rounded hover:bg-indigo-200">
+                                <Copy size={10} className="mr-1" /> Load Mine
+                              </button>
+                          </div>
+                      </div>
                       <div className="space-y-3">
                         <textarea 
                             value={geminiKeys} 
@@ -477,30 +484,23 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
                            </div>
                         </details>
                       </div>
-                    )}
-                  </div>
-
-                  {/* Groq */}
-                  <div className={`p-4 rounded-xl border transition-all ${includeGroq ? 'bg-orange-50 border-orange-200' : 'bg-white border-slate-200 opacity-70'}`}>
-                    <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                          <input type="checkbox" checked={includeGroq} onChange={e => setIncludeGroq(e.target.checked)} className="w-5 h-5 accent-orange-600 rounded cursor-pointer" />
-                          <span className="font-bold text-slate-700">Groq Cloud</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            {includeGroq && (
-                                <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer" className="text-[10px] flex items-center bg-orange-100 text-orange-600 px-2 py-1 rounded hover:bg-orange-200 font-bold">
-                                  Dapatkan Key <ArrowRight size={10} className="ml-1" />
-                                </a>
-                            )}
-                            {includeGroq && (
-                                <button onClick={() => loadMyKeys('groq')} className="text-[10px] flex items-center bg-orange-100 text-orange-600 px-2 py-1 rounded hover:bg-orange-200">
-                                  <Copy size={10} className="mr-1" /> Load Mine
-                                </button>
-                            )}
-                        </div>
                     </div>
-                    {includeGroq && (
+                  )}
+
+                  {/* Groq Input */}
+                  {selectedProvider === 'groq' && (
+                    <div className="p-4 rounded-xl border border-orange-200 bg-orange-50/50 transition-all">
+                      <div className="flex items-center justify-between mb-3">
+                          <span className="font-bold text-slate-700">Groq API Keys</span>
+                          <div className="flex items-center gap-2">
+                              <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer" className="text-[10px] flex items-center bg-orange-100 text-orange-600 px-2 py-1 rounded hover:bg-orange-200 font-bold">
+                                Dapatkan Key <ArrowRight size={10} className="ml-1" />
+                              </a>
+                              <button onClick={() => loadMyKeys('groq')} className="text-[10px] flex items-center bg-orange-100 text-orange-600 px-2 py-1 rounded hover:bg-orange-200">
+                                <Copy size={10} className="mr-1" /> Load Mine
+                              </button>
+                          </div>
+                      </div>
                       <div className="space-y-3">
                         <textarea 
                             value={groqKeys} 
@@ -532,8 +532,8 @@ export const AdminGenerator: React.FC<AdminGeneratorProps> = ({ onClose }) => {
                            </div>
                         </details>
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
               </section>
 
               {/* Section 3: Database */}

@@ -549,6 +549,37 @@ export const MikirCloud = {
     }
   },
 
+  // --- STORAGE MODULE (File Uploads) ---
+  storage: {
+    async uploadFile(config: SupabaseConfig, file: File, bucket: string = 'materials', folder: string = 'uploads') {
+      const sb = MikirCloud._client(config);
+      
+      // Auth check (optional, but recommended for RLS)
+      const { data: { user } } = await sb.auth.getUser();
+      // Note: If using anon key without RLS, user might be null. 
+      // But for "Adult Architecture", we assume some auth or at least RLS that allows anon uploads if configured.
+      
+      const fileExt = file.name.split('.').pop();
+      // Sanitize filename
+      const cleanName = file.name.replace(/[^a-zA-Z0-9.]/g, '_');
+      const filePath = `${folder}/${Date.now()}_${cleanName}`;
+
+      const { data, error } = await sb.storage
+        .from(bucket)
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false
+        });
+
+      if (error) throw new Error(`Gagal upload ke Storage: ${error.message}`);
+      
+      // Get Public URL
+      const { data: { publicUrl } } = sb.storage.from(bucket).getPublicUrl(filePath);
+      
+      return { path: data.path, url: publicUrl, name: file.name, type: file.type };
+    }
+  },
+
   // --- SYSTEM MODULE ---
   system: {
     async getStats(config: SupabaseConfig) {

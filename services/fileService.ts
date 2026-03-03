@@ -28,15 +28,24 @@ export const extractPdfText = async (file: File, onProgress?: (p: string) => voi
       if (onProgress) onProgress(`${file.name}: Membaca Halaman ${i}/${maxPages}...`);
       
       // Yield to main thread to prevent UI freezing
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await new Promise(resolve => setTimeout(resolve, 10));
 
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      const pageText = textContent.items.map((item: any) => item.str).join(" ");
-      textChunks.push(pageText);
-      
-      // @ts-ignore
-      if (page.cleanup) page.cleanup();
+      try {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        
+        // Yield again before processing text items
+        await new Promise(resolve => setTimeout(resolve, 0));
+        
+        const pageText = textContent.items.map((item: any) => item.str).join(" ");
+        textChunks.push(pageText);
+        
+        // @ts-ignore
+        if (page.cleanup) page.cleanup();
+      } catch (pageError) {
+        console.warn(`Skipping page ${i} due to error:`, pageError);
+        // Continue to next page instead of failing the whole document
+      }
     }
     
     return textChunks.join("\n");

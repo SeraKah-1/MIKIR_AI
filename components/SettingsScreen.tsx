@@ -6,6 +6,7 @@ import { saveApiKey, getApiKey, removeApiKey, saveStorageConfig, getStorageProvi
 import { MikirCloud, SUPABASE_SCHEMA_SQL } from '../services/supabaseService'; 
 import { setSRSEnabled, isSRSEnabled } from '../services/srsService';
 import { requestKaomojiPermission, notifySupabaseSuccess, notifySupabaseError } from '../services/kaomojiNotificationService';
+import { scheduleDailyReminder, getReminderTime } from '../services/notificationService';
 import { getSavedTheme } from '../services/themeService';
 import { getKeycardSession, logoutKeycard } from '../services/keycardService'; 
 import { GlassButton } from './GlassButton';
@@ -24,7 +25,7 @@ export const SettingsScreen: React.FC = () => {
   const [groqKey, setGroqKey] = useState('');
   const [isGeminiSaved, setIsGeminiSaved] = useState(false);
   const [isGroqSaved, setIsGroqSaved] = useState(false);
-  const [storageTab, setStorageTab] = useState<'ai' | 'storage' | 'account' | 'appearance' | 'features'>('ai');
+  const [storageTab, setStorageTab] = useState<'ai' | 'storage' | 'account' | 'appearance' | 'features' | 'notifications'>('ai');
   const [storageProvider, setStorageProvider] = useState<StorageProvider>('local');
   const [supabaseUrl, setSupabaseUrl] = useState('');
   const [supabaseKey, setSupabaseKey] = useState('');
@@ -37,6 +38,10 @@ export const SettingsScreen: React.FC = () => {
   
   const [sessionMetadata, setSessionMetadata] = useState<any>(null);
 
+  // NOTIFICATION STATES
+  const [reminderTime, setReminderTime] = useState('');
+  const [notifPermission, setNotifPermission] = useState(Notification.permission);
+
   // ADMIN STATES
   const [showAdminAuth, setShowAdminAuth] = useState(false);
   const [adminPassInput, setAdminPassInput] = useState('');
@@ -44,7 +49,14 @@ export const SettingsScreen: React.FC = () => {
   const [showLoginGate, setShowLoginGate] = useState(false);
 
   useEffect(() => {
-    requestKaomojiPermission();
+    // Check permissions on mount
+    if ("Notification" in window) {
+        setNotifPermission(Notification.permission);
+    }
+    
+    const savedTime = getReminderTime();
+    if (savedTime) setReminderTime(savedTime);
+
     const savedGemini = getApiKey('gemini');
     if (savedGemini) { setGeminiKey(savedGemini); setIsGeminiSaved(true); }
     const savedGroq = getApiKey('groq');
@@ -62,6 +74,24 @@ export const SettingsScreen: React.FC = () => {
     window.addEventListener('keycard_changed', handleKeycardChange);
     return () => window.removeEventListener('keycard_changed', handleKeycardChange);
   }, []);
+
+  const handleRequestNotif = async () => {
+      const granted = await requestKaomojiPermission();
+      setNotifPermission(granted ? 'granted' : 'denied');
+      if (granted) alert("Notifikasi diaktifkan! ( ◕ ‿ ◕ )");
+      else alert("Notifikasi ditolak browser. Cek setting browser kamu.");
+  };
+
+  const handleSaveReminder = () => {
+      if (notifPermission !== 'granted') {
+          alert("Aktifkan izin notifikasi dulu ya!");
+          return;
+      }
+      if (reminderTime) {
+          scheduleDailyReminder(reminderTime);
+          alert(`Pengingat diset jam ${reminderTime}!`);
+      }
+  };
 
   const handleSaveKeys = () => {
     if (activeTab === 'gemini') {
@@ -178,7 +208,7 @@ export const SettingsScreen: React.FC = () => {
       )}
 
       <div className="flex space-x-2 md:space-x-4 mb-8 justify-center overflow-x-auto pb-2 scrollbar-hide">
-         {['ai', 'storage', 'account', 'appearance', 'features'].map(tab => (
+         {['ai', 'storage', 'account', 'appearance', 'features', 'notifications'].map(tab => (
            <button key={tab} onClick={() => setStorageTab(tab as any)} className={`px-6 py-2 rounded-full font-medium transition-all whitespace-nowrap capitalize ${storageTab === tab ? tabActive : tabInactive}`}>{tab}</button>
          ))}
       </div>
@@ -307,6 +337,54 @@ export const SettingsScreen: React.FC = () => {
              <div className="flex items-center space-x-3 mb-6"><div className="p-3 bg-theme-primary/10 rounded-xl text-theme-primary"><Palette size={24} /></div><div><h2 className="text-2xl font-bold">Tema</h2><p className="text-sm opacity-70">Ganti suasana hati.</p></div></div>
              <ThemeSelector currentTheme={currentTheme} onThemeChange={setCurrentTheme} />
           </>
+        )}
+
+        {storageTab === 'notifications' && (
+            <>
+              <div className="flex items-center space-x-3 mb-6"><div className="p-3 bg-theme-primary/10 rounded-xl text-theme-primary"><ShieldAlert size={24} /></div><div><h2 className="text-2xl font-bold">Notifikasi</h2><p className="text-sm opacity-70">Atur pengingat belajar.</p></div></div>
+              
+              <div className="bg-theme-glass border border-theme-border rounded-2xl p-6 mb-6">
+                 <div className="flex items-center justify-between mb-4">
+                    <div>
+                        <h3 className="font-bold text-lg">Izin Browser</h3>
+                        <p className="text-sm opacity-60">Izinkan Mikir mengirim notifikasi.</p>
+                    </div>
+                    <button 
+                        onClick={handleRequestNotif}
+                        disabled={notifPermission === 'granted'}
+                        className={`px-4 py-2 rounded-xl font-bold text-sm transition-all ${notifPermission === 'granted' ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20' : 'bg-theme-primary text-white shadow-lg hover:bg-theme-primary/90'}`}
+                    >
+                        {notifPermission === 'granted' ? 'Aktif (Granted)' : 'Aktifkan Notifikasi'}
+                    </button>
+                 </div>
+                 {notifPermission === 'denied' && (
+                     <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-500 text-xs">
+                        Browser memblokir notifikasi. Silakan reset izin di pengaturan browser (ikon gembok di URL bar).
+                     </div>
+                 )}
+              </div>
+
+              <div className="bg-theme-glass border border-theme-border rounded-2xl p-6">
+                  <h3 className="font-bold text-lg mb-4">Jadwal Belajar Harian</h3>
+                  <div className="flex items-end gap-4">
+                      <div className="flex-1">
+                          <label className="block text-xs font-bold uppercase tracking-wider opacity-60 mb-2">Waktu Pengingat</label>
+                          <input 
+                            type="time" 
+                            value={reminderTime} 
+                            onChange={(e) => setReminderTime(e.target.value)}
+                            className="w-full bg-theme-bg border border-theme-border rounded-xl px-4 py-3 text-2xl font-mono focus:outline-none focus:ring-2 focus:ring-theme-primary"
+                          />
+                      </div>
+                      <GlassButton onClick={handleSaveReminder} className="h-[58px] px-6 flex items-center justify-center font-bold">
+                          <Save size={18} className="mr-2" /> Simpan Jadwal
+                      </GlassButton>
+                  </div>
+                  <p className="text-xs opacity-60 mt-4">
+                      * Kami akan mengirim notifikasi lucu setiap hari pada jam ini untuk mengingatkanmu belajar.
+                  </p>
+              </div>
+            </>
         )}
 
         {storageTab === 'features' && (

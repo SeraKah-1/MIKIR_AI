@@ -30,7 +30,7 @@ export const fetchGroqModels = async (apiKey: string): Promise<ModelOption[]> =>
     // Transform Groq API response to ModelOption
     if (data && Array.isArray(data.data)) {
        return data.data
-         .filter((m: any) => !m.id.includes('whisper')) // Exclude audio models
+         .filter((m: any) => m && m.id && !m.id.includes('whisper')) // Exclude audio models & invalid
          .map((m: any) => ({
             id: m.id,
             label: m.id, // Use ID as label for now
@@ -48,15 +48,19 @@ export const fetchGroqModels = async (apiKey: string): Promise<ModelOption[]> =>
 
 const extractAndParseJSON = (text: string): any[] => {
   if (!text) return [];
+  
+  console.log("Raw Groq Response (First 500 chars):", text.substring(0, 500));
+
   // 1. Clean Markdown
   let cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
   
-  // 2. Try parsing the whole thing first
+  // 2. Try parsing the whole thing first (Best Case)
   try {
       const parsed = JSON.parse(cleaned);
       if (Array.isArray(parsed)) return parsed;
       if (typeof parsed === 'object') {
           // Look for any array property (e.g. "questions": [...])
+          if (Array.isArray(parsed.questions)) return parsed.questions;
           for (const key in parsed) {
               if (Array.isArray(parsed[key])) return parsed[key];
           }
@@ -88,12 +92,14 @@ const extractAndParseJSON = (text: string): any[] => {
   if (startObj !== -1 && endObj !== -1) {
       try {
           const jsonObj = JSON.parse(cleaned.substring(startObj, endObj + 1));
+          if (Array.isArray(jsonObj.questions)) return jsonObj.questions;
           for (const key in jsonObj) {
               if (Array.isArray(jsonObj[key])) return jsonObj[key];
           }
       } catch(e) {}
   }
 
+  console.error("Groq JSON Parse Failed. Raw:", text);
   return [];
 };
 
@@ -164,103 +170,103 @@ export const generateQuizGroq = async (
     : `DIFFICULTY: ${ExamStyle.C2_CONCEPT}`;
 
   const totalBatches = Math.ceil(questionCount / BATCH_SIZE);
-  let allRawQuestions: any[] = [];
   const chunkSize = Math.ceil(contextMaterial.length / totalBatches);
+  
+  const batchPromises: Promise<any[]>[] = [];
 
   for (let i = 0; i < totalBatches; i++) {
     const batchNum = i + 1;
-    const needed = Math.min(BATCH_SIZE, questionCount - allRawQuestions.length);
-    if (needed <= 0) break;
+    const needed = Math.min(BATCH_SIZE, questionCount - (i * BATCH_SIZE));
+    
+    if (needed <= 0) continue;
 
     const startIdx = i * chunkSize;
     const endIdx = Math.min((i + 1) * chunkSize, contextMaterial.length);
     const batchContext = contextMaterial.substring(Math.max(0, startIdx - 500), endIdx); 
 
-    let success = false;
-    let attempts = 0;
+    const generateBatch = async (): Promise<any[]> => {
+        let attempts = 0;
+        while (attempts < MAX_RETRIES) {
+            attempts++;
+            onProgress(`Groq: Meracik Paket Soal ${batchNum}/${totalBatches} (Parallel)...`);
 
-    while (!success && attempts < MAX_RETRIES) {
-      attempts++;
-      onProgress(`Groq: Meracik Paket Soal ${batchNum}/${totalBatches}...`);
+            // SIMPLIFIED PROMPT FOR SPEED
+            const prompt = `
+                <context>
+                ${batchContext.substring(0, 25000)}
+                </context>
 
-      // STRICT PROMPT ENGINEERING FOR LLAMA-3 / MIXTRAL
-      // We use XML tags to clearly separate Instructions from Data.
-      // Updated Output Format to prefer Object Wrapper for json_object mode stability.
-      const prompt = `
-        <context_material>
-        ${batchContext.substring(0, 15000)}
-        </context_material>
+                <task>
+                Create ${needed} multiple-choice questions in INDONESIAN based on <context>.
+                Focus: ${topic || 'Main Concepts'}
+                ${bloomInstruction}
+                User Note: ${customPrompt || "None"}
+                
+                Format: JSON Object with "questions" array.
+                Structure:
+                - text: Question string
+                - options: [A, B, C, D]
+                - correctIndex: 0-3
+                - explanation: Why correct + why others wrong.
+                - hint: Socratic hint.
+                - keyPoint: Topic tag.
+                </task>
+            `;
 
-        <instructions>
-        You are an exam generator. Your task is to create ${needed} multiple-choice questions in INDONESIAN language.
-        
-        CRITICAL RULES:
-        1. SOURCE OF TRUTH: You must ONLY use the text inside <context_material> tags. Do NOT use outside knowledge.
-        2. If the <context_material> is empty or unrelated, return an empty JSON array [].
-        3. IGNORE metadata like page numbers, headers, or footers.
-        4. FOCUS: ${topic ? `Focus specifically on: ${topic}` : 'Cover the main concepts found in the text.'}
-        5. ${bloomInstruction}
-        6. USER NOTE: ${customPrompt || "None"}
-        7. SOCRATIC HINT: Provide a 'hint' that guides the user to the answer without giving it away directly.
-        
-        OUTPUT FORMAT (JSON OBJECT):
-        {
-          "questions": [
-            {
-              "text": "Question text here?",
-              "options": ["Option A", "Option B", "Option C", "Option D"],
-              "correctIndex": 0,
-              "explanation": "Brief explanation why A is correct based on the text.",
-              "hint": "Socratic hint to help the user...",
-              "keyPoint": "Topic Tag"
+            try {
+                const response = await fetch(GROQ_API_URL, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    messages: [
+                    { 
+                        role: "system", 
+                        content: "You are a strict JSON exam generator. Output JSON only." 
+                    },
+                    { role: "user", content: prompt }
+                    ],
+                    model: modelId,
+                    temperature: 0.3, 
+                    stream: false,
+                    response_format: { type: "json_object" } 
+                })
+                });
+
+                if (response.status === 429) {
+                    await new Promise(r => setTimeout(r, 3000));
+                    continue; 
+                }
+
+                if (!response.ok) throw new Error(`Groq API Error: ${response.status}`);
+                
+                const json = await response.json();
+                const content = json.choices[0]?.message?.content;
+                const batchQs = extractAndParseJSON(content);
+
+                if (batchQs.length > 0) {
+                    const validQuestions = batchQs.map(sanitizeQuestion).filter(q => q !== null);
+                    if (validQuestions.length > 0) {
+                        return validQuestions;
+                    }
+                }
+            } catch (err) {
+                console.warn(`Batch ${batchNum} failed, retrying...`, err);
+                if (attempts < MAX_RETRIES) await new Promise(r => setTimeout(r, 1000));
             }
-          ]
         }
-        </instructions>
-      `;
+        return []; 
+    };
 
-      try {
-        const response = await fetch(GROQ_API_URL, {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            messages: [
-              { 
-                  role: "system", 
-                  content: "You are a strict JSON-only API. You extract educational questions from provided text. You never hallucinate facts not present in the source." 
-              },
-              { role: "user", content: prompt }
-            ],
-            model: modelId,
-            temperature: 0.3, // Lower temperature for more factual results
-            stream: false,
-            response_format: { type: "json_object" } 
-          })
-        });
+    batchPromises.push(generateBatch());
+  }
 
-        if (response.status === 429) {
-           await new Promise(r => setTimeout(r, 4000));
-           continue; 
-        }
-
-        if (!response.ok) throw new Error(`Groq API Error: ${response.status}`);
-        
-        const json = await response.json();
-        const content = json.choices[0]?.message?.content;
-        const batchQs = extractAndParseJSON(content);
-
-        if (batchQs.length > 0) {
-           const validQuestions = batchQs.map(sanitizeQuestion).filter(q => q !== null);
-           if (validQuestions.length > 0) {
-               allRawQuestions = [...allRawQuestions, ...validQuestions];
-               success = true;
-           }
-        }
-      } catch (err) {
-        console.warn("Batch failed, retrying...", err);
-        if (attempts < MAX_RETRIES) await new Promise(r => setTimeout(r, 2000));
-      }
-    }
+  let allRawQuestions: any[] = [];
+  try {
+      const results = await Promise.all(batchPromises);
+      allRawQuestions = results.flat();
+  } catch (e) {
+      console.error("Groq Parallel Error", e);
+      throw new Error("Gagal mengambil data dari Groq.");
   }
 
   if (allRawQuestions.length === 0) throw new Error("Gagal membuat soal. Dokumen mungkin tidak terbaca atau model sedang sibuk.");

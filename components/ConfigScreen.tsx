@@ -51,8 +51,8 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
 
   // Config State
   const [provider, setProvider] = useState<AiProvider>('gemini');
-  const [modelId, setModelId] = useState(AVAILABLE_MODELS[0].id);
-  const [dynamicModels, setDynamicModels] = useState<ModelOption[]>(AVAILABLE_MODELS);
+  const [modelId, setModelId] = useState(AVAILABLE_MODELS?.[0]?.id || "");
+  const [dynamicModels, setDynamicModels] = useState<ModelOption[]>(AVAILABLE_MODELS || []);
   const [questionCount, setQuestionCount] = useState(10);
   const [mode, setMode] = useState<QuizMode>(QuizMode.STANDARD);
   // Default to C2 Concept, array type now
@@ -95,11 +95,11 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
           // Merge with default Gemini models
           const geminiModels = AVAILABLE_MODELS.filter(m => m.provider === 'gemini');
           // If fetch fails, keep defaults
-          if (groqModels.length > 0) {
+          if (groqModels && groqModels.length > 0) {
              setDynamicModels([...geminiModels, ...groqModels]);
              // Reset selection if current model isn't in new list
              if (!groqModels.find(m => m.id === modelId)) {
-                setModelId(groqModels[0].id);
+                setModelId(groqModels[0]?.id || "");
              }
           } else {
              setDynamicModels(AVAILABLE_MODELS);
@@ -112,9 +112,9 @@ export const ConfigScreen: React.FC<ConfigScreenProps> = ({ onStart, onContinue,
         }
       } else {
         // Reset to defaults for Gemini
-        setDynamicModels(AVAILABLE_MODELS);
-        if (!AVAILABLE_MODELS.find(m => m.id === modelId && m.provider === 'gemini')) {
-           setModelId(AVAILABLE_MODELS[0].id);
+        setDynamicModels(AVAILABLE_MODELS || []);
+        if (!AVAILABLE_MODELS?.find(m => m.id === modelId && m.provider === 'gemini')) {
+           setModelId(AVAILABLE_MODELS?.[0]?.id || "");
         }
       }
     };

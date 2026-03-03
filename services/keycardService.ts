@@ -80,30 +80,55 @@ export const applyKeycardToSession = (data: KeycardData): { upgraded: boolean, n
       upgraded = true;
   }
   
-  // Inject keys if they exist in the card
-  
-  // 1. GEMINI
-  if (data.config.geminiKeys && data.config.geminiKeys.length > 0) {
-     saveApiKeysPool('gemini', data.config.geminiKeys);
-     // Also save single key for legacy fallback
-     saveApiKey('gemini', data.config.geminiKeys[0]);
-  } else if (data.config.geminiKey) {
-     saveApiKey('gemini', data.config.geminiKey);
+  // DETERMINE ACTIVE PROVIDER
+  let activeProvider = data.config.preferredProvider;
+  if (!activeProvider) {
+      // Fallback for legacy cards
+      if ((data.config.geminiKeys && data.config.geminiKeys.length > 0) || data.config.geminiKey) {
+          activeProvider = 'gemini';
+      } else if ((data.config.groqKeys && data.config.groqKeys.length > 0) || data.config.groqKey) {
+          activeProvider = 'groq';
+      } else {
+          activeProvider = 'gemini';
+      }
   }
-  
-  // 2. GROQ
-  if (data.config.groqKeys && data.config.groqKeys.length > 0) {
-     saveApiKeysPool('groq', data.config.groqKeys);
-     saveApiKey('groq', data.config.groqKeys[0]);
-  } else if (data.config.groqKey) {
-     saveApiKey('groq', data.config.groqKey);
+
+  // 1. APPLY KEYS BASED ON PROVIDER
+  if (activeProvider === 'gemini') {
+      // Load Gemini
+      if (data.config.geminiKeys && data.config.geminiKeys.length > 0) {
+         saveApiKeysPool('gemini', data.config.geminiKeys);
+         saveApiKey('gemini', data.config.geminiKeys[0]);
+      } else if (data.config.geminiKey) {
+         saveApiKey('gemini', data.config.geminiKey);
+      }
+      
+      // WIPE GROQ (Enforce Exclusivity)
+      localStorage.removeItem('glassquiz_groq_key');
+      localStorage.removeItem('glassquiz_groq_keys_pool');
+      
+  } else {
+      // Load Groq
+      if (data.config.groqKeys && data.config.groqKeys.length > 0) {
+         saveApiKeysPool('groq', data.config.groqKeys);
+         saveApiKey('groq', data.config.groqKeys[0]);
+      } else if (data.config.groqKey) {
+         saveApiKey('groq', data.config.groqKey);
+      }
+      
+      // WIPE GEMINI (Enforce Exclusivity)
+      localStorage.removeItem('glassquiz_api_key');
+      localStorage.removeItem('glassquiz_gemini_keys_pool');
   }
-  
+
   // Handle Legacy cards (v1.0) that had generic 'apiKey' and 'provider'
   // @ts-ignore
   if (data.config.apiKey && data.config.provider) {
      // @ts-ignore
-     saveApiKey(data.config.provider, data.config.apiKey);
+     // Only apply if it matches our active provider decision
+     if (data.config.provider === activeProvider) {
+        saveApiKey(data.config.provider, data.config.apiKey);
+     }
   }
 
   // Inject Supabase

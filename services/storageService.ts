@@ -475,6 +475,20 @@ export const uploadToCloud = async (quiz: any, visibility: 'public' | 'private' 
   return await MikirCloud.quiz.create(sbConfig, payload, keycardId);
 };
 
+export const uploadFileToStorage = async (file: File) => {
+  const sbConfig = getSupabaseConfig();
+  if (!sbConfig) throw new Error("Supabase belum dikonfigurasi.");
+  
+  try {
+    return await MikirCloud.storage.uploadFile(sbConfig, file);
+  } catch (error: any) {
+    if (error.message && error.message.includes('Bucket not found')) {
+       throw new Error("Bucket 'materials' belum dibuat di Supabase Storage. Jalankan script SQL di Dashboard.");
+    }
+    throw error;
+  }
+};
+
 export const fetchCloudQuizzes = async (visibility: 'public' | 'private' | 'unlisted' | 'mine' | 'all' = 'public') => {
   const sbConfig = getSupabaseConfig();
   if (!sbConfig) return [];

@@ -228,11 +228,11 @@ const App: React.FC = () => {
             // --- SHUFFLE OPTIONS ---
             newQuestions = shuffleOptions(newQuestions);
 
-            const maxId = Math.max(...originalQuestions.map(q => q.id), 0);
-            const indexedNewQuestions = newQuestions.map((q, i) => ({ ...q, id: maxId + i + 1 }));
+            const maxId = Math.max(...(originalQuestions || []).map(q => q?.id || 0), 0);
+            const indexedNewQuestions = (newQuestions || []).filter(q => q).map((q, i) => ({ ...q, id: maxId + i + 1 }));
             
             // Merge Originals
-            const mergedOriginals = [...originalQuestions, ...indexedNewQuestions];
+            const mergedOriginals = [...(originalQuestions || []), ...indexedNewQuestions];
             setOriginalQuestions(mergedOriginals);
             
             // Merge Playables (Use retention if previously enabled)

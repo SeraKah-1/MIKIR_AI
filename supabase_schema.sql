@@ -63,3 +63,22 @@ CREATE POLICY "Keycard Access" ON public.generated_quizzes FOR ALL USING (true) 
 CREATE POLICY "Keycard Access" ON public.library_materials FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Keycard Access" ON public.neuro_notes FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Keycard Access" ON public.neuro_srs FOR ALL USING (true) WITH CHECK (true);
+
+-- =========================================================
+-- STORAGE BUCKET SETUP (Run this in SQL Editor too)
+-- =========================================================
+-- 1. Create Bucket 'materials'
+INSERT INTO storage.buckets (id, name, public) 
+VALUES ('materials', 'materials', true)
+ON CONFLICT (id) DO NOTHING;
+
+-- 2. Storage Policies
+-- Allow public read access to all files in 'materials' bucket
+CREATE POLICY "Public Access Materials" ON storage.objects FOR SELECT USING ( bucket_id = 'materials' );
+
+-- Allow authenticated users to upload
+CREATE POLICY "Authenticated Upload Materials" ON storage.objects FOR INSERT WITH CHECK ( bucket_id = 'materials' AND auth.role() = 'authenticated' );
+
+-- Allow users to update/delete their own files
+CREATE POLICY "Owner Manage Materials" ON storage.objects FOR ALL USING ( bucket_id = 'materials' AND auth.uid() = owner );
+
