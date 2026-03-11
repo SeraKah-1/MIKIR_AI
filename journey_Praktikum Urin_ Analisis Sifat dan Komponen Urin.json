@@ -1,0 +1,824 @@
+{
+  "title": "Praktikum Urin: Analisis Sifat dan Komponen Urin",
+  "description": "Visualisasi langkah-demi-langkah praktikum analisis urin, meliputi sifat fisik, kimiawi umum, dan komponen spesifik seperti keton, protein, glukosa, asam urat, kreatinin, dan ureum.",
+  "zones": [
+    {
+      "id": "z1",
+      "name": "Area Penerimaan & Pengamatan Awal",
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "w": 16,
+        "h": 20
+      },
+      "color": "bg-blue-950/30"
+    },
+    {
+      "id": "z2",
+      "name": "Meja Uji Fisik & Kimia Umum",
+      "bounds": {
+        "x": 17,
+        "y": 0,
+        "w": 16,
+        "h": 20
+      },
+      "color": "bg-green-950/30"
+    },
+    {
+      "id": "z3",
+      "name": "Stasiun Analisis Biokimia Spesifik",
+      "bounds": {
+        "x": 34,
+        "y": 0,
+        "w": 16,
+        "h": 20
+      },
+      "color": "bg-red-950/30"
+    }
+  ],
+  "actors": [
+    {
+      "id": "u",
+      "name": "Urin Sampel",
+      "char": "U",
+      "color": "text-yellow-300"
+    },
+    {
+      "id": "t",
+      "name": "Tabung Reaksi",
+      "char": "T",
+      "color": "text-gray-300"
+    },
+    {
+      "id": "m",
+      "name": "Gelas Ukur",
+      "char": "M",
+      "color": "text-blue-300"
+    },
+    {
+      "id": "p",
+      "name": "Pipet",
+      "char": "P",
+      "color": "text-purple-300"
+    },
+    {
+      "id": "n",
+      "name": "Urinometer",
+      "char": "N",
+      "color": "text-cyan-300"
+    },
+    {
+      "id": "i",
+      "name": "Indikator Universal",
+      "char": "I",
+      "color": "text-orange-300"
+    },
+    {
+      "id": "f",
+      "name": "FeCl3 (Keton)",
+      "char": "F",
+      "color": "text-red-500"
+    },
+    {
+      "id": "a",
+      "name": "Asam Asetat (Protein)",
+      "char": "A",
+      "color": "text-lime-500"
+    },
+    {
+      "id": "b",
+      "name": "Reagen Benedict (Glukosa)",
+      "char": "B",
+      "color": "text-green-500"
+    },
+    {
+      "id": "w",
+      "name": "Waterbath",
+      "char": "W",
+      "color": "text-blue-500"
+    },
+    {
+      "id": "s",
+      "name": "NaCO3 (Asam Urat)",
+      "char": "S",
+      "color": "text-pink-500"
+    },
+    {
+      "id": "l",
+      "name": "Fosfo-tungstat (Asam Urat)",
+      "char": "L",
+      "color": "text-teal-500"
+    },
+    {
+      "id": "k",
+      "name": "Asam Pikrat (Kreatinin)",
+      "char": "K",
+      "color": "text-yellow-500"
+    },
+    {
+      "id": "d",
+      "name": "NaOH (Kreatinin/Urea)",
+      "char": "D",
+      "color": "text-gray-500"
+    },
+    {
+      "id": "e",
+      "name": "Urease (Urea)",
+      "char": "E",
+      "color": "text-indigo-500"
+    },
+    {
+      "id": "x",
+      "name": "Fenol/Hipoklorit (Urea)",
+      "char": "X",
+      "color": "text-emerald-500"
+    }
+  ],
+  "scenes": [
+    {
+      "id": 1,
+      "title": "Penerimaan Sampel Urin",
+      "description": "Sampel urin diterima di area pengamatan awal untuk inspeksi makroskopis.",
+      "positions": [
+        {
+          "actorId": "u",
+          "x": 5,
+          "y": 10
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Pengamatan Warna Urin",
+      "description": "Mengamati dan mencatat warna sampel urin.",
+      "positions": [
+        {
+          "actorId": "u",
+          "x": 6,
+          "y": 10
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Pengamatan Bau Urin",
+      "description": "Mengcium dan mencatat bau sampel urin.",
+      "positions": [
+        {
+          "actorId": "u",
+          "x": 7,
+          "y": 10
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Pengukuran Volume Urin",
+      "description": "Sampel urin dimasukkan ke dalam gelas ukur 2L untuk dicatat volumenya.",
+      "positions": [
+        {
+          "actorId": "u",
+          "x": 18,
+          "y": 10
+        },
+        {
+          "actorId": "m",
+          "x": 19,
+          "y": 10
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Pengukuran Berat Jenis Urin (1)",
+      "description": "Urin dipindahkan ke gelas ukur 100ml. Urinometer disiapkan.",
+      "positions": [
+        {
+          "actorId": "u",
+          "x": 19,
+          "y": 11
+        },
+        {
+          "actorId": "m",
+          "x": 20,
+          "y": 11
+        },
+        {
+          "actorId": "n",
+          "x": 21,
+          "y": 11
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Pengukuran Berat Jenis Urin (2)",
+      "description": "Urinometer dimasukkan ke dalam urin dan diputar perlahan. Skala urinometer dibaca setelah stabil.",
+      "positions": [
+        {
+          "actorId": "u",
+          "x": 19,
+          "y": 12
+        },
+        {
+          "actorId": "m",
+          "x": 20,
+          "y": 12
+        },
+        {
+          "actorId": "n",
+          "x": 20,
+          "y": 13
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Pengukuran pH Urin (1)",
+      "description": "Urin dimasukkan ke dalam gelas piala. Indikator universal disiapkan.",
+      "positions": [
+        {
+          "actorId": "u",
+          "x": 23,
+          "y": 10
+        },
+        {
+          "actorId": "m",
+          "x": 24,
+          "y": 10
+        },
+        {
+          "actorId": "i",
+          "x": 25,
+          "y": 10
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Pengukuran pH Urin (2)",
+      "description": "Kertas indikator universal dicelupkan ke dalam urin dan dicocokkan dengan standar warna.",
+      "positions": [
+        {
+          "actorId": "u",
+          "x": 23,
+          "y": 11
+        },
+        {
+          "actorId": "m",
+          "x": 24,
+          "y": 11
+        },
+        {
+          "actorId": "i",
+          "x": 24,
+          "y": 12
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Perhitungan Total Padatan Urin",
+      "description": "Total padatan urin dihitung menggunakan rumus BJ dan volume urin.",
+      "positions": [
+        {
+          "actorId": "u",
+          "x": 27,
+          "y": 10
+        },
+        {
+          "actorId": "m",
+          "x": 28,
+          "y": 10
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Persiapan Uji Keton (Gerhardt)",
+      "description": "Sampel urin dipindahkan ke tabung reaksi. Reagen FeCl3 disiapkan.",
+      "positions": [
+        {
+          "actorId": "u",
+          "x": 35,
+          "y": 3
+        },
+        {
+          "actorId": "t",
+          "x": 36,
+          "y": 3
+        },
+        {
+          "actorId": "f",
+          "x": 37,
+          "y": 3
+        },
+        {
+          "actorId": "p",
+          "x": 38,
+          "y": 3
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Penambahan Reagen FeCl3",
+      "description": "Beberapa tetes FeCl3 ditambahkan hingga terbentuk endapan.",
+      "positions": [
+        {
+          "actorId": "t",
+          "x": 36,
+          "y": 4
+        },
+        {
+          "actorId": "f",
+          "x": 37,
+          "y": 4
+        },
+        {
+          "actorId": "p",
+          "x": 37,
+          "y": 5
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Filtrasi dan Penambahan Lanjutan FeCl3",
+      "description": "Cairan disaring, kemudian filtrat ditambahkan beberapa tetes FeCl3 10% lagi.",
+      "positions": [
+        {
+          "actorId": "t",
+          "x": 36,
+          "y": 5
+        },
+        {
+          "actorId": "f",
+          "x": 37,
+          "y": 5
+        },
+        {
+          "actorId": "p",
+          "x": 37,
+          "y": 6
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Observasi Hasil Uji Keton",
+      "description": "Warna yang timbul diamati untuk interpretasi hasil (merah coklat/anggur port).",
+      "positions": [
+        {
+          "actorId": "t",
+          "x": 36,
+          "y": 6
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Persiapan Uji Protein (Koagulasi)",
+      "description": "Lima tabung reaksi diisi dengan urin yang mengandung konsentrasi albumin berbeda (0%, 0.5%, 2%, 5%, 10%).",
+      "positions": [
+        {
+          "actorId": "t",
+          "x": 35,
+          "y": 8
+        },
+        {
+          "actorId": "t",
+          "x": 36,
+          "y": 8
+        },
+        {
+          "actorId": "t",
+          "x": 37,
+          "y": 8
+        },
+        {
+          "actorId": "t",
+          "x": 38,
+          "y": 8
+        },
+        {
+          "actorId": "t",
+          "x": 39,
+          "y": 8
+        },
+        {
+          "actorId": "u",
+          "x": 35,
+          "y": 7
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "title": "Pemanasan Sampel Protein",
+      "description": "Semua tabung dimasukkan ke waterbath mendidih selama 5 menit.",
+      "positions": [
+        {
+          "actorId": "t",
+          "x": 36,
+          "y": 9
+        },
+        {
+          "actorId": "t",
+          "x": 37,
+          "y": 9
+        },
+        {
+          "actorId": "t",
+          "x": 38,
+          "y": 9
+        },
+        {
+          "actorId": "w",
+          "x": 37,
+          "y": 10
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "title": "Penambahan Asam Asetat",
+      "description": "Setelah dipanaskan, ditambahkan 3 tetes asam asetat 6% ke masing-masing tabung jika ada gumpalan.",
+      "positions": [
+        {
+          "actorId": "t",
+          "x": 36,
+          "y": 11
+        },
+        {
+          "actorId": "t",
+          "x": 37,
+          "y": 11
+        },
+        {
+          "actorId": "t",
+          "x": 38,
+          "y": 11
+        },
+        {
+          "actorId": "a",
+          "x": 39,
+          "y": 11
+        },
+        {
+          "actorId": "p",
+          "x": 39,
+          "y": 12
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "title": "Observasi Koagulasi Protein",
+      "description": "Proses koagulasi diamati dan korelasi jumlah protein dengan tingkat koagulasi dicatat.",
+      "positions": [
+        {
+          "actorId": "t",
+          "x": 36,
+          "y": 12
+        },
+        {
+          "actorId": "t",
+          "x": 37,
+          "y": 12
+        },
+        {
+          "actorId": "t",
+          "x": 38,
+          "y": 12
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "title": "Persiapan Uji Glukosa (Benedict)",
+      "description": "Lima tabung reaksi diisi dengan 2,5ml reagen Benedict dan urin dengan berbagai konsentrasi glukosa.",
+      "positions": [
+        {
+          "actorId": "t",
+          "x": 42,
+          "y": 3
+        },
+        {
+          "actorId": "t",
+          "x": 43,
+          "y": 3
+        },
+        {
+          "actorId": "t",
+          "x": 44,
+          "y": 3
+        },
+        {
+          "actorId": "b",
+          "x": 42,
+          "y": 2
+        },
+        {
+          "actorId": "u",
+          "x": 43,
+          "y": 2
+        },
+        {
+          "actorId": "p",
+          "x": 44,
+          "y": 2
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "title": "Pemanasan Sampel Glukosa",
+      "description": "Kelima tabung dimasukkan ke waterbath mendidih selama 5 menit.",
+      "positions": [
+        {
+          "actorId": "t",
+          "x": 42,
+          "y": 4
+        },
+        {
+          "actorId": "t",
+          "x": 43,
+          "y": 4
+        },
+        {
+          "actorId": "t",
+          "x": 44,
+          "y": 4
+        },
+        {
+          "actorId": "w",
+          "x": 43,
+          "y": 5
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "title": "Pendinginan dan Observasi Glukosa",
+      "description": "Setelah dingin, perubahan warna dan endapan (hijau, kuning, oranye, merah bata) diamati.",
+      "positions": [
+        {
+          "actorId": "t",
+          "x": 42,
+          "y": 6
+        },
+        {
+          "actorId": "t",
+          "x": 43,
+          "y": 6
+        },
+        {
+          "actorId": "t",
+          "x": 44,
+          "y": 6
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "title": "Persiapan Uji Asam Urat",
+      "description": "Satu tabung reaksi diisi dengan urin. NaCO3 dan fosfo-tungstat disiapkan.",
+      "positions": [
+        {
+          "actorId": "u",
+          "x": 35,
+          "y": 14
+        },
+        {
+          "actorId": "t",
+          "x": 36,
+          "y": 14
+        },
+        {
+          "actorId": "s",
+          "x": 37,
+          "y": 14
+        },
+        {
+          "actorId": "l",
+          "x": 38,
+          "y": 14
+        },
+        {
+          "actorId": "p",
+          "x": 39,
+          "y": 14
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "title": "Penambahan Reagen Asam Urat",
+      "description": "1ml NaCO3 14% dan 3ml fosfo-tungstat ditambahkan ke tabung reaksi, diikuti beberapa tetes urin.",
+      "positions": [
+        {
+          "actorId": "t",
+          "x": 36,
+          "y": 15
+        },
+        {
+          "actorId": "s",
+          "x": 37,
+          "y": 15
+        },
+        {
+          "actorId": "l",
+          "x": 38,
+          "y": 15
+        },
+        {
+          "actorId": "u",
+          "x": 39,
+          "y": 15
+        },
+        {
+          "actorId": "p",
+          "x": 39,
+          "y": 16
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "title": "Observasi Hasil Asam Urat",
+      "description": "Warna biru yang terbentuk diamati sebagai indikasi asam urat.",
+      "positions": [
+        {
+          "actorId": "t",
+          "x": 36,
+          "y": 16
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "title": "Persiapan Uji Kreatinin (Jaffe)",
+      "description": "Satu tabung reaksi diisi dengan urin. Asam pikrat jenuh dan NaOH 10% disiapkan.",
+      "positions": [
+        {
+          "actorId": "u",
+          "x": 18,
+          "y": 14
+        },
+        {
+          "actorId": "t",
+          "x": 19,
+          "y": 14
+        },
+        {
+          "actorId": "k",
+          "x": 20,
+          "y": 14
+        },
+        {
+          "actorId": "d",
+          "x": 21,
+          "y": 14
+        },
+        {
+          "actorId": "p",
+          "x": 22,
+          "y": 14
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "title": "Penambahan Reagen Kreatinin",
+      "description": "7ml asam pikrat jenuh dan 1ml NaOH 10% ditambahkan, diikuti beberapa tetes urin.",
+      "positions": [
+        {
+          "actorId": "t",
+          "x": 19,
+          "y": 15
+        },
+        {
+          "actorId": "k",
+          "x": 20,
+          "y": 15
+        },
+        {
+          "actorId": "d",
+          "x": 21,
+          "y": 15
+        },
+        {
+          "actorId": "u",
+          "x": 22,
+          "y": 15
+        },
+        {
+          "actorId": "p",
+          "x": 22,
+          "y": 16
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "title": "Observasi Hasil Kreatinin",
+      "description": "Warna oranye yang terbentuk diamati.",
+      "positions": [
+        {
+          "actorId": "t",
+          "x": 19,
+          "y": 16
+        }
+      ]
+    },
+    {
+      "id": 27,
+      "title": "Persiapan Uji Urea",
+      "description": "Satu tabung reaksi diisi dengan 0.1ml Urease dan 0.25ml urin encer.",
+      "positions": [
+        {
+          "actorId": "u",
+          "x": 25,
+          "y": 14
+        },
+        {
+          "actorId": "t",
+          "x": 26,
+          "y": 14
+        },
+        {
+          "actorId": "e",
+          "x": 27,
+          "y": 14
+        },
+        {
+          "actorId": "p",
+          "x": 28,
+          "y": 14
+        }
+      ]
+    },
+    {
+      "id": 28,
+      "title": "Inkubasi Awal Urea",
+      "description": "Campuran diinkubasi 15 menit dalam waterbath pada suhu 37°C.",
+      "positions": [
+        {
+          "actorId": "t",
+          "x": 26,
+          "y": 15
+        },
+        {
+          "actorId": "e",
+          "x": 27,
+          "y": 15
+        },
+        {
+          "actorId": "w",
+          "x": 28,
+          "y": 15
+        }
+      ]
+    },
+    {
+      "id": 29,
+      "title": "Penambahan Reagen Warna Urea",
+      "description": "Setelah inkubasi, 2.5ml Phenol reagen dan 2.5ml hipoklorit ditambahkan.",
+      "positions": [
+        {
+          "actorId": "t",
+          "x": 26,
+          "y": 16
+        },
+        {
+          "actorId": "x",
+          "x": 27,
+          "y": 16
+        },
+        {
+          "actorId": "p",
+          "x": 28,
+          "y": 16
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "title": "Inkubasi Akhir dan Observasi Urea",
+      "description": "Campuran diinkubasi 15 menit lagi pada 37°C, kemudian perubahan warna menjadi biru diamati.",
+      "positions": [
+        {
+          "actorId": "t",
+          "x": 26,
+          "y": 17
+        },
+        {
+          "actorId": "w",
+          "x": 28,
+          "y": 17
+        }
+      ]
+    }
+  ]
+}
